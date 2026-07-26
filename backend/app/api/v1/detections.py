@@ -23,6 +23,25 @@ router = APIRouter()
 UPLOAD_DIR = "static/evidence"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+
+def detection_to_dto(detection) -> DetectionDto:
+    bbox_data = detection.bbox or {}
+    return DetectionDto(
+        id=detection.id,
+        camera_id=detection.camera_id,
+        frame_id=detection.frame_id,
+        vehicle_type=detection.vehicle_type,
+        confidence=detection.confidence,
+        bbox=BoundingBoxDto(
+            x1=bbox_data.get("x1", 0),
+            y1=bbox_data.get("y1", 0),
+            x2=bbox_data.get("x2", 0),
+            y2=bbox_data.get("y2", 0)
+        ),
+        metadata=detection.metadata_ or {},
+        detected_at=detection.detected_at
+    )
+
 @router.get("", response_model=Dict[str, Any])
 async def read_detections(
     page: int = Query(1, ge=1),
@@ -51,31 +70,11 @@ async def read_detections(
         camera_id=camera_id,
         vehicle_type=vehicle_type,
         from_date=from_date,
-        to_date=to_date
+        to_date=to_date,
+        min_confidence=min_confidence
     )
     
-    # Map model to DTO compatibility (bbox mapping)
-    data = []
-    for d in detections:
-        bbox_data = d.bbox
-        bbox_dto = BoundingBoxDto(
-            x1=bbox_data.get("x1", 0),
-            y1=bbox_data.get("y1", 0),
-            x2=bbox_data.get("x2", 0),
-            y2=bbox_data.get("y2", 0)
-        )
-        data.append(
-            DetectionDto(
-                id=str(d.id),
-                camera_id=str(d.camera_id),
-                frame_id=d.frame_id,
-                vehicle_type=d.vehicle_type,
-                confidence=d.confidence,
-                bbox=bbox_dto,
-                metadata=d.metadata_,
-                detected_at=d.detected_at
-            )
-        )
+    data = [detection_to_dto(d).model_dump(mode="json", by_alias=True) for d in detections]
         
     return {
         "data": data,
@@ -99,23 +98,7 @@ async def read_detection(
             detail="Không tìm thấy bản ghi detection."
         )
 
-    bbox_data = detection.bbox
-    bbox_dto = BoundingBoxDto(
-        x1=bbox_data.get("x1", 0),
-        y1=bbox_data.get("y1", 0),
-        x2=bbox_data.get("x2", 0),
-        y2=bbox_data.get("y2", 0)
-    )
-    return DetectionDto(
-        id=str(detection.id),
-        camera_id=str(detection.camera_id),
-        frame_id=detection.frame_id,
-        vehicle_type=detection.vehicle_type,
-        confidence=detection.confidence,
-        bbox=bbox_dto,
-        metadata=detection.metadata_,
-        detected_at=detection.detected_at
-    )
+    return detection_to_dto(detection)
 
 @router.post("/detect", status_code=status.HTTP_201_CREATED)
 async def upload_and_detect(

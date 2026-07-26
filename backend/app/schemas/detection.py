@@ -18,7 +18,7 @@ class DetectionDto(BaseSchema):
     vehicle_type: str
     confidence: float
     bbox: BoundingBoxDto
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     detected_at: datetime
 
 class DetectionCreate(BaseSchema):

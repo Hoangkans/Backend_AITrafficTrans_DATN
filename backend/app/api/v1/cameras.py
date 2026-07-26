@@ -17,6 +17,25 @@ from app.crud.crud_camera import (
 
 router = APIRouter()
 
+
+def camera_to_dto(camera) -> Dict[str, Any]:
+    return {
+        "id": str(camera.id),
+        "name": camera.name,
+        "rtspUrl": camera.rtsp_url,
+        "latitude": camera.latitude,
+        "longitude": camera.longitude,
+        "address": camera.address,
+        "intersection": camera.intersection,
+        "direction": camera.direction,
+        "status": camera.status,
+        "config": camera.config or {},
+        "vehicleTypes": camera.vehicle_types or [],
+        "createdAt": camera.created_at.isoformat() if camera.created_at else None,
+        "updatedAt": camera.updated_at.isoformat() if camera.updated_at else None
+    }
+
+
 @router.get("", response_model=Dict[str, Any])
 async def read_cameras(
     page: int = Query(1, ge=1),
@@ -28,9 +47,9 @@ async def read_cameras(
 ):
     skip = (page - 1) * page_size
     cameras = await get_cameras(db, status=status, intersection=intersection, skip=skip, limit=page_size)
-    total = await count_cameras(db, status=status)
+    total = await count_cameras(db, status=status, intersection=intersection)
     return {
-        "data": cameras,
+        "data": [camera_to_dto(camera) for camera in cameras],
         "total": total,
         "page": page,
         "pageSize": page_size
@@ -48,7 +67,7 @@ async def read_camera(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Không tìm thấy camera."
         )
-    return camera
+    return camera_to_dto(camera)
 
 @router.post("", response_model=CameraDto, status_code=status.HTTP_201_CREATED)
 async def add_camera(
@@ -93,4 +112,3 @@ async def remove_camera(
         )
     await db.commit()
     return None
-

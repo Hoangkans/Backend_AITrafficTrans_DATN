@@ -41,7 +41,8 @@ async def count_detections(
     camera_id: Optional[uuid.UUID] = None,
     vehicle_type: Optional[str] = None,
     from_date: Optional[datetime] = None,
-    to_date: Optional[datetime] = None
+    to_date: Optional[datetime] = None,
+    min_confidence: Optional[float] = None
 ) -> int:
     from sqlalchemy import func
     query = select(func.count(Detection.id))
@@ -53,6 +54,8 @@ async def count_detections(
         query = query.filter(Detection.detected_at >= from_date)
     if to_date:
         query = query.filter(Detection.detected_at <= to_date)
+    if min_confidence is not None:
+        query = query.filter(Detection.confidence >= min_confidence)
     result = await db.execute(query)
     return result.scalar() or 0
 

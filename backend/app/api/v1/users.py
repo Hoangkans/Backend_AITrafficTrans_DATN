@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,8 +18,24 @@ from app.crud.crud_operator import (
     update_operator,
     delete_operator
 )
+from app.services.email_service import send_admin_created_user_email
 
 router = APIRouter()
+
+
+def user_to_dto(user) -> Dict[str, Any]:
+    return {
+        "id": str(user.id),
+        "username": user.username,
+        "email": user.email,
+        "fullName": user.full_name,
+        "role": user.role,
+        "isActive": user.is_active,
+        "isEmailVerified": user.is_email_verified,
+        "emailVerifiedAt": user.email_verified_at.isoformat() if user.email_verified_at else None,
+        "createdAt": user.created_at.isoformat() if user.created_at else None,
+        "updatedAt": user.updated_at.isoformat() if user.updated_at else None
+    }
 
 
 @router.get("", response_model=Dict[str, Any])
@@ -33,7 +50,7 @@ async def read_users(
     users = await get_operators(db, skip=skip, limit=page_size)
     total = await count_operators(db)
     return {
-        "data": users,
+        "data": [user_to_dto(user) for user in users],
         "total": total,
         "page": page,
         "pageSize": page_size
@@ -53,7 +70,7 @@ async def read_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Không tìm thấy người dùng."
         )
-    return user
+    return user_to_dto(user)
 
 
 @router.post("", response_model=UserDto, status_code=status.HTTP_201_CREATED)
@@ -80,9 +97,12 @@ async def create_user(
             detail="Email đã được sử dụng."
         )
 
-    user = await create_operator(db, user_in, role=user_in.role or "operator")
+    user = await create_operator(db, user_in, role=user_in.role or "operator", is_email_verified=True)
+    user.email_verified_at = datetime.now(timezone.utc)
+    db.add(user)
     await db.commit()
     await db.refresh(user)
+    send_admin_created_user_email(user, user_in.password)
     return user
 
 

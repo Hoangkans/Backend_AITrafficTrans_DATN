@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     EMAIL_VERIFICATION_EXPIRE_HOURS: int = 24
+    PASSWORD_RESET_OTP_EXPIRE_MINUTES: int = 10
 
     # Email delivery. When SMTP_HOST is not configured, verification links are logged for local demos.
     SMTP_HOST: str = ""

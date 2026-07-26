@@ -17,6 +17,26 @@ from app.crud.crud_violation import (
 
 router = APIRouter()
 
+
+def violation_to_dto(violation) -> Dict[str, Any]:
+    return {
+        "id": str(violation.id),
+        "detectionId": str(violation.detection_id) if violation.detection_id else None,
+        "cameraId": str(violation.camera_id),
+        "violationType": violation.violation_type,
+        "vehicleType": violation.vehicle_type,
+        "licensePlate": violation.license_plate,
+        "confidence": violation.confidence,
+        "evidenceUrl": violation.evidence_url,
+        "metadata": violation.metadata_ or {},
+        "isConfirmed": violation.is_confirmed,
+        "confirmedBy": str(violation.confirmed_by) if violation.confirmed_by else None,
+        "notes": violation.notes,
+        "createdAt": violation.created_at.isoformat() if violation.created_at else None,
+        "detection": None
+    }
+
+
 @router.get("", response_model=Dict[str, Any])
 async def read_violations(
     page: int = Query(1, ge=1),
@@ -43,7 +63,7 @@ async def read_violations(
         is_confirmed=is_confirmed
     )
     return {
-        "data": violations,
+        "data": [violation_to_dto(violation) for violation in violations],
         "total": total,
         "page": page,
         "pageSize": page_size
@@ -56,7 +76,7 @@ async def search_violations(
     current_operator: Operator = Depends(get_current_operator)
 ):
     violations = await search_violations_by_license_plate(db, q)
-    return violations
+    return [violation_to_dto(violation) for violation in violations]
 
 @router.get("/{violation_id}", response_model=ViolationDto)
 async def read_violation(
@@ -70,7 +90,7 @@ async def read_violation(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Không tìm thấy bản ghi vi phạm."
         )
-    return violation
+    return violation_to_dto(violation)
 
 @router.patch("/{violation_id}", response_model=ViolationDto)
 async def verify_violation(
@@ -94,4 +114,4 @@ async def verify_violation(
     )
     await db.commit()
     await db.refresh(violation)
-    return violation
+    return violation_to_dto(violation)

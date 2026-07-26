@@ -53,5 +53,13 @@ class VerifyEmailRequest(BaseSchema):
 class ResendVerificationEmailRequest(BaseSchema):
     email: EmailStr
 
+class ForgotPasswordRequest(BaseSchema):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseSchema):
+    email: EmailStr
+    otp: str = Field(..., min_length=6, max_length=6)
+    new_password: str = Field(..., validation_alias="newPassword", min_length=6)
+
 class MessageResponse(BaseSchema):
     message: str

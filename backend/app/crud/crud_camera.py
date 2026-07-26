@@ -27,11 +27,17 @@ async def get_cameras(
     result = await db.execute(query)
     return list(result.scalars().all())
 
-async def count_cameras(db: AsyncSession, status: Optional[str] = None) -> int:
+async def count_cameras(
+    db: AsyncSession,
+    status: Optional[str] = None,
+    intersection: Optional[str] = None
+) -> int:
     from sqlalchemy import func
     query = select(func.count(Camera.id))
     if status:
         query = query.filter(Camera.status == status)
+    if intersection:
+        query = query.filter(Camera.intersection.ilike(f"%{intersection}%"))
     result = await db.execute(query)
     return result.scalar() or 0
 

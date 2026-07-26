@@ -23,10 +23,15 @@ from app.crud.crud_email_verification import (
     get_valid_email_verification_token,
     revoke_active_email_verification_tokens
 )
+from app.crud.crud_password_reset_otp import (
+    create_password_reset_otp,
+    get_valid_password_reset_otp,
+    revoke_active_password_reset_otps
+)
 from app.dependencies.auth import get_current_operator
 from app.models.operator import Operator
 from app.models.refresh_token import RefreshToken
-from app.services.email_service import send_verification_email
+from app.services.email_service import send_password_reset_otp_email, send_verification_email
 from app.schemas.auth import (
     LoginRequest,
     RegisterRequest,
@@ -36,6 +41,8 @@ from app.schemas.auth import (
     TokenRefreshRequest,
     VerifyEmailRequest,
     ResendVerificationEmailRequest,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
     MessageResponse
 )
 
@@ -160,6 +167,48 @@ async def resend_verification_email(
     await db.commit()
     send_verification_email(operator, verification_token)
     return {"message": generic_message}
+
+@router.post("/forgot-password", response_model=MessageResponse)
+async def forgot_password(
+    forgot_data: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    operator = await get_operator_by_email(db, str(forgot_data.email))
+    generic_message = "Neu email ton tai, he thong se gui ma OTP dat lai mat khau."
+    if not operator or not operator.is_active:
+        return {"message": generic_message}
+
+    await revoke_active_password_reset_otps(db, operator.id)
+    _, otp = await create_password_reset_otp(db, operator.id)
+    await db.commit()
+    send_password_reset_otp_email(operator, otp)
+    return {"message": generic_message}
+
+@router.post("/reset-password", response_model=MessageResponse)
+async def reset_password(
+    reset_data: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    operator = await get_operator_by_email(db, str(reset_data.email))
+    if not operator or not operator.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email hoac OTP khong hop le."
+        )
+
+    db_otp = await get_valid_password_reset_otp(db, operator.id, reset_data.otp)
+    if not db_otp:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email hoac OTP khong hop le hoac da het han."
+        )
+
+    now = datetime.now(timezone.utc)
+    db_otp.used_at = now
+    await update_operator_password(db, operator, reset_data.new_password)
+    db.add(db_otp)
+    await db.commit()
+    return {"message": "Dat lai mat khau thanh cong."}
 
 @router.get("/me", response_model=UserProfileDto)
 async def get_me(current_operator: Operator = Depends(get_current_operator)):
