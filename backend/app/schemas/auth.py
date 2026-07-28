@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field
 from pydantic.alias_generators import to_camel
 
 class BaseSchema(BaseModel):
@@ -48,7 +48,14 @@ class TokenRefreshRequest(BaseSchema):
     refresh_token: str = Field(..., validation_alias="refreshToken")
 
 class VerifyEmailRequest(BaseSchema):
-    token: str
+    email: Optional[EmailStr] = None
+    otp: str = Field(
+        ...,
+        validation_alias=AliasChoices("otp", "token"),
+        min_length=6,
+        max_length=6,
+        pattern=r"^\d{6}$"
+    )
 
 class ResendVerificationEmailRequest(BaseSchema):
     email: EmailStr

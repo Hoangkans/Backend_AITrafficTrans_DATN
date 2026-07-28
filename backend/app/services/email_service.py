@@ -34,12 +34,12 @@ def _html_shell(title: str, body_html: str) -> str:
 """
 
 
-def _send_email(to_email: str, subject: str, text_body: str, html_body: str, log_tag: str) -> None:
+def _send_email(to_email: str, subject: str, text_body: str, html_body: str, log_tag: str) -> bool:
     if not settings.SMTP_HOST:
         print(f"[{log_tag}] SMTP_HOST is not configured.")
         print(f"[{log_tag}] To: {to_email}")
         print(text_body)
-        return
+        return False
 
     message = EmailMessage()
     message["Subject"] = subject
@@ -54,34 +54,38 @@ def _send_email(to_email: str, subject: str, text_body: str, html_body: str, log
                 smtp.starttls()
             if settings.SMTP_USERNAME:
                 smtp.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
-            smtp.send_message(message)
+            refused_recipients = smtp.send_message(message)
+            if refused_recipients:
+                print(f"[{log_tag}] SMTP refused recipients: {refused_recipients}")
+                return False
+            return True
     except Exception as exc:
         print(f"[{log_tag}] Failed to send email to {to_email}: {exc}")
+        return False
 
 
-def send_verification_email(operator: Operator, token: str) -> None:
-    verification_url = f"{settings.FRONTEND_URL}/verify-email?token={token}"
+def send_verification_email(operator: Operator, otp: str) -> bool:
     name = _display_name(operator)
     subject = "Xac thuc email tai khoan Traffic Monitoring System"
     text_body = (
         f"Xin chao {name},\n\n"
-        "Vui long xac thuc email bang lien ket sau:\n"
-        f"{verification_url}\n\n"
-        "Lien ket se het han theo cau hinh cua he thong.\n"
+        f"Ma OTP xac thuc email cua ban la: {otp}\n"
+        f"Ma co hieu luc trong {settings.EMAIL_VERIFICATION_EXPIRE_HOURS} gio.\n\n"
+        "Neu ban khong tao tai khoan, vui long bo qua email nay.\n"
     )
     html_body = _html_shell(
         "Xac thuc email",
         (
             f"<p>Xin chao <strong>{escape(name)}</strong>,</p>"
-            "<p>Vui long bam nut ben duoi de xac thuc email tai khoan.</p>"
-            f"<p><a href=\"{escape(verification_url)}\" style=\"display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:6px;font-weight:bold;\">Xac thuc email</a></p>"
-            f"<p style=\"color:#64748b;font-size:13px;\">Neu nut khong hoat dong, mo lien ket nay:<br>{escape(verification_url)}</p>"
+            "<p>Nhap ma OTP sau de xac thuc email tai khoan:</p>"
+            f"<div style=\"font-size:32px;letter-spacing:8px;font-weight:bold;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:16px;text-align:center;\">{escape(otp)}</div>"
+            f"<p style=\"color:#64748b;font-size:13px;\">Ma co hieu luc trong {settings.EMAIL_VERIFICATION_EXPIRE_HOURS} gio.</p>"
         )
     )
-    _send_email(operator.email, subject, text_body, html_body, "email-verification")
+    return _send_email(operator.email, subject, text_body, html_body, "email-verification")
 
 
-def send_admin_created_user_email(operator: Operator, plain_password: str) -> None:
+def send_admin_created_user_email(operator: Operator, plain_password: str) -> bool:
     login_url = f"{settings.FRONTEND_URL}/login"
     name = _display_name(operator)
     subject = "Tai khoan Traffic Monitoring System cua ban da duoc tao"
@@ -108,10 +112,10 @@ def send_admin_created_user_email(operator: Operator, plain_password: str) -> No
             "<p style=\"color:#64748b;font-size:13px;\">Vui long doi mat khau sau khi dang nhap thanh cong.</p>"
         )
     )
-    _send_email(operator.email, subject, text_body, html_body, "admin-created-user")
+    return _send_email(operator.email, subject, text_body, html_body, "admin-created-user")
 
 
-def send_password_reset_otp_email(operator: Operator, otp: str) -> None:
+def send_password_reset_otp_email(operator: Operator, otp: str) -> bool:
     name = _display_name(operator)
     subject = "Ma OTP dat lai mat khau Traffic Monitoring System"
     text_body = (
@@ -129,4 +133,4 @@ def send_password_reset_otp_email(operator: Operator, otp: str) -> None:
             f"<p style=\"color:#64748b;font-size:13px;\">Ma co hieu luc trong {settings.PASSWORD_RESET_OTP_EXPIRE_MINUTES} phut.</p>"
         )
     )
-    _send_email(operator.email, subject, text_body, html_body, "password-reset-otp")
+    return _send_email(operator.email, subject, text_body, html_body, "password-reset-otp")

@@ -122,18 +122,33 @@ async def register(reg_data: RegisterRequest, db: AsyncSession = Depends(get_db)
         
     operator = await create_operator(db, reg_data, is_email_verified=False)
     _, verification_token = await create_email_verification_token(db, operator.id)
+    if not send_verification_email(operator, verification_token):
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Khong gui duoc email xac thuc. Vui long kiem tra cau hinh SMTP hoac dia chi email nhan."
+        )
     await db.commit()
     await db.refresh(operator)
-    send_verification_email(operator, verification_token)
     return operator
 
 @router.post("/verify-email", response_model=MessageResponse)
 async def verify_email(verify_data: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
-    db_token = await get_valid_email_verification_token(db, verify_data.token)
+    operator_id = None
+    if verify_data.email:
+        operator = await get_operator_by_email(db, str(verify_data.email))
+        if not operator:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email hoac OTP xac thuc khong hop le."
+            )
+        operator_id = operator.id
+
+    db_token = await get_valid_email_verification_token(db, verify_data.otp, operator_id)
     if not db_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Token xac thuc email khong hop le hoac da het han."
+            detail="OTP xac thuc email khong hop le hoac da het han."
         )
 
     operator = await db.get(Operator, db_token.operator_id)
@@ -164,8 +179,13 @@ async def resend_verification_email(
 
     await revoke_active_email_verification_tokens(db, operator.id)
     _, verification_token = await create_email_verification_token(db, operator.id)
+    if not send_verification_email(operator, verification_token):
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Khong gui duoc email xac thuc. Vui long kiem tra cau hinh SMTP hoac dia chi email nhan."
+        )
     await db.commit()
-    send_verification_email(operator, verification_token)
     return {"message": generic_message}
 
 @router.post("/forgot-password", response_model=MessageResponse)
@@ -180,8 +200,13 @@ async def forgot_password(
 
     await revoke_active_password_reset_otps(db, operator.id)
     _, otp = await create_password_reset_otp(db, operator.id)
+    if not send_password_reset_otp_email(operator, otp):
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Khong gui duoc email OTP. Vui long kiem tra cau hinh SMTP hoac dia chi email nhan."
+        )
     await db.commit()
-    send_password_reset_otp_email(operator, otp)
     return {"message": generic_message}
 
 @router.post("/reset-password", response_model=MessageResponse)

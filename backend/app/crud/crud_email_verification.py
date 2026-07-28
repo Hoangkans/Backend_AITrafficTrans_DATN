@@ -19,8 +19,8 @@ async def create_email_verification_token(
     db: AsyncSession,
     operator_id: uuid.UUID
 ) -> Tuple[EmailVerificationToken, str]:
-    token = secrets.token_urlsafe(32)
-    token_hash = hash_verification_token(token)
+    otp = f"{secrets.randbelow(1_000_000):06d}"
+    token_hash = hash_verification_token(otp)
     expires_at = datetime.now(timezone.utc) + timedelta(hours=settings.EMAIL_VERIFICATION_EXPIRE_HOURS)
 
     db_token = EmailVerificationToken(
@@ -30,21 +30,25 @@ async def create_email_verification_token(
     )
     db.add(db_token)
     await db.flush()
-    return db_token, token
+    return db_token, otp
 
 
 async def get_valid_email_verification_token(
     db: AsyncSession,
-    token: str
+    token: str,
+    operator_id: Optional[uuid.UUID] = None
 ) -> Optional[EmailVerificationToken]:
     token_hash = hash_verification_token(token)
     now = datetime.now(timezone.utc)
-    result = await db.execute(
+    query = (
         select(EmailVerificationToken)
         .filter(EmailVerificationToken.token_hash == token_hash)
         .filter(EmailVerificationToken.used_at.is_(None))
         .filter(EmailVerificationToken.expires_at > now)
     )
+    if operator_id:
+        query = query.filter(EmailVerificationToken.operator_id == operator_id)
+    result = await db.execute(query)
     return result.scalars().first()
 
 
