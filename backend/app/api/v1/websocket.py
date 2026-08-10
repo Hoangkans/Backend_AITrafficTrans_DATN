@@ -1,5 +1,7 @@
 import json
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from typing import Any, Dict
+
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from app.websocket.manager import dashboard_manager
 from app.core.security import decode_token
 
@@ -7,6 +9,47 @@ from app.core.security import decode_token
 __all__ = ["router", "dashboard_manager"]
 
 router = APIRouter()
+
+
+@router.get("/ws/dashboard/contract", response_model=Dict[str, Any])
+async def dashboard_ws_contract():
+    return {
+        "version": 1,
+        "auth": {
+            "type": "queryToken",
+            "param": "token",
+            "description": "Use the access token from /api/v1/auth/login.",
+        },
+        "endpoints": {
+            "dashboard": "/api/v1/ws/dashboard?token=<accessToken>",
+            "cameraStream": "/api/v1/ws/camera/{cameraId}/stream?token=<accessToken>",
+            "dashboardByCamera": "/api/v1/ws/dashboard?cameraId={cameraId}&token=<accessToken>",
+        },
+        "clientMessages": [
+            {"type": "ping"},
+            {"type": "switch_camera", "cameraId": "<cameraId>"},
+        ],
+        "serverMessages": {
+            "pong": {"type": "pong"},
+            "violationAlert": {
+                "type": "violation_alert",
+                "version": 1,
+                "priority": "high",
+                "data": {
+                    "id": "string",
+                    "cameraId": "string",
+                    "cameraName": "string",
+                    "violationType": "speeding",
+                    "vehicleType": "string",
+                    "licensePlate": "string|null",
+                    "confidence": "number",
+                    "evidenceUrl": "string",
+                    "status": "pending|verified|rejected",
+                    "createdAt": "ISO-8601 datetime",
+                },
+            },
+        },
+    }
 
 @router.websocket("/ws/dashboard")
 async def dashboard_ws(

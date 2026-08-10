@@ -17,6 +17,7 @@ class Violation(Base):
     confidence = Column(Float, nullable=False)
     evidence_url = Column(Text, nullable=True)
     metadata_ = Column("metadata", JSONB, nullable=False, default=dict)  # {"speed_kmh": 85, "speed_limit": 60}
+    status = Column(String(20), nullable=False, default="pending", index=True)  # pending, verified, rejected
     is_confirmed = Column(Boolean, nullable=False, default=False, index=True)
     confirmed_by = Column(UUID(as_uuid=True), ForeignKey("operators.id", ondelete="SET NULL"), nullable=True)
     notes = Column(Text, nullable=True)

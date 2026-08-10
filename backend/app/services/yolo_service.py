@@ -1,5 +1,4 @@
 import os
-import random
 from typing import List, Dict, Any
 from app.core.config import settings
 
@@ -7,23 +6,23 @@ class YOLOService:
     def __init__(self, model_path: str = None):
         self.model_path = model_path or settings.YOLO_MODEL_PATH
         self.model = None
-        self.is_mock = True
+        self.model_available = False
         
         if os.path.exists(self.model_path):
             try:
                 from ultralytics import YOLO
                 self.model = YOLO(self.model_path)
-                self.is_mock = False
+                self.model_available = True
                 print(f"[+] YOLO Model loaded successfully from {self.model_path}")
             except Exception as e:
-                print(f"[!] Failed to load YOLO model: {e}. Running in Mock Mode.")
+                print(f"[!] Failed to load YOLO model: {e}. Detection will return no results.")
         else:
-            print(f"[!] YOLO Model file not found at '{self.model_path}'. Running in Mock Mode.")
+            print(f"[!] YOLO Model file not found at '{self.model_path}'. Detection will return no results.")
 
     def detect(self, image_data_or_path: Any, conf_threshold: float = None) -> List[Dict[str, Any]]:
         threshold = conf_threshold or settings.YOLO_CONFIDENCE_THRESHOLD
         
-        if not self.is_mock and self.model:
+        if self.model_available and self.model:
             try:
                 results = self.model(image_data_or_path, conf=threshold)
                 detections = []
@@ -60,38 +59,8 @@ class YOLOService:
                         })
                 return detections
             except Exception as e:
-                print(f"[-] YOLO Inference failed: {e}. Falling back to Mock.")
-                
-        # Generate mock detections for development
-        labels = ["car", "motorcycle", "truck", "bus", "bicycle"]
-        detections = []
-        num_objects = random.randint(2, 6)
-        for i in range(num_objects):
-            label = random.choice(labels)
-            conf = random.uniform(0.55, 0.97)
-            x1 = random.randint(10, 300)
-            y1 = random.randint(10, 300)
-            x2 = x1 + random.randint(50, 150)
-            y2 = y1 + random.randint(50, 150)
-            
-            # Optionally add license plate or speed metadata
-            meta = {}
-            if label in ["car", "truck"]:
-                meta["license_plate"] = f"{random.randint(29, 99)}A-{random.randint(100, 999)}.{random.randint(10, 99)}"
-                meta["speed_kmh"] = random.randint(30, 90)
-            
-            detections.append({
-                "class_id": labels.index(label),
-                "class_name": label,
-                "confidence": conf,
-                "bbox": {
-                    "x1": x1,
-                    "y1": y1,
-                    "x2": x2,
-                    "y2": y2
-                },
-                "metadata": meta
-            })
-        return detections
+                print(f"[-] YOLO Inference failed: {e}.")
+
+        return []
 
 yolo_service = YOLOService()

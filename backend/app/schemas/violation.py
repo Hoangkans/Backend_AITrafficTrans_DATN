@@ -16,6 +16,7 @@ class ViolationDto(BaseSchema):
     confidence: float
     evidence_url: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
+    status: str = "pending"
     is_confirmed: bool
     confirmed_by: Optional[uuid.UUID] = None
 
@@ -37,4 +38,5 @@ class ViolationCreate(BaseSchema):
 
 class ViolationConfirmRequest(BaseSchema):
     notes: Optional[str] = None
-    is_confirmed: bool = True
+    is_confirmed: Optional[bool] = None
+    status: Optional[str] = Field(None, pattern="^(pending|verified|rejected)$")

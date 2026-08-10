@@ -1,86 +1,85 @@
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, Query
+from typing import Optional, List
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import func
 
 from app.core.database import get_db
 from app.dependencies.auth import get_current_operator
-from app.models.operator import Operator
 from app.models.camera import Camera
 from app.models.detection import Detection
-from app.models.violation import Violation
+from app.models.operator import Operator
 from app.models.traffic_stats import TrafficStat
-from app.schemas.stats import DashboardOverviewDto, TimeSeriesStatDto, ViolationStatDto
+from app.models.violation import Violation
+from app.schemas.stats import (
+    CameraLiveDto,
+    DashboardOverviewDto,
+    TimeSeriesStatDto,
+    VehicleTypeStatDto,
+    ViolationHotspotDto,
+    ViolationStatDto,
+    ViolationStatusStatDto,
+)
 
 router = APIRouter()
+
+
+def percentage(count: int, total: int) -> float:
+    return round((count / total) * 100, 2) if total else 0.0
+
 
 @router.get("/overview", response_model=DashboardOverviewDto)
 async def get_dashboard_overview(
     db: AsyncSession = Depends(get_db),
     current_operator: Operator = Depends(get_current_operator)
 ):
-    # 1. Count cameras
     total_cameras = (await db.execute(select(func.count(Camera.id)))).scalar() or 0
-    online_cameras = (await db.execute(select(func.count(Camera.id)).filter(Camera.status == "active"))).scalar() or 0
+    online_cameras = (
+        await db.execute(select(func.count(Camera.id)).filter(Camera.status == "active"))
+    ).scalar() or 0
     offline_cameras = total_cameras - online_cameras
-    
-    # 2. Count vehicles detected in last 24h
-    since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
-    total_vehicles_daily = (await db.execute(
-        select(func.count(Detection.id))
-        .filter(Detection.detected_at >= since_24h)
-    )).scalar() or 0
-    
-    # 3. Counts by type in last 24h
-    motorcycle_count = (await db.execute(
-        select(func.count(Detection.id))
-        .filter(Detection.detected_at >= since_24h)
-        .filter(Detection.vehicle_type == "motorcycle")
-    )).scalar() or 0
-    
-    car_count = (await db.execute(
-        select(func.count(Detection.id))
-        .filter(Detection.detected_at >= since_24h)
-        .filter(Detection.vehicle_type == "car")
-    )).scalar() or 0
-    
-    truck_count = (await db.execute(
-        select(func.count(Detection.id))
-        .filter(Detection.detected_at >= since_24h)
-        .filter(Detection.vehicle_type == "truck")
-    )).scalar() or 0
-    
-    bus_count = (await db.execute(
-        select(func.count(Detection.id))
-        .filter(Detection.detected_at >= since_24h)
-        .filter(Detection.vehicle_type == "bus")
-    )).scalar() or 0
-    
-    # Fallback to realistic mock values if database is empty (so dashboard doesn't look blank)
-    if total_cameras == 0:
-        total_cameras = 12
-        online_cameras = 10
-        offline_cameras = 2
-    if total_vehicles_daily == 0:
-        total_vehicles_daily = 1420
-        motorcycle_count = 850
-        car_count = 420
-        truck_count = 110
-        bus_count = 40
 
-    return {
-        "totalVehiclesDaily": total_vehicles_daily,
-        "motorcycleCount": motorcycle_count,
-        "carCount": car_count,
-        "truckCount": truck_count,
-        "busCount": bus_count,
-        "onlineCameras": online_cameras,
-        "offlineCameras": offline_cameras,
-        "totalCameras": total_cameras
-    }
+    total_detections = (await db.execute(select(func.count(Detection.id)))).scalar() or 0
+    total_violations = (await db.execute(select(func.count(Violation.id)))).scalar() or 0
+    confirmed_violations = (
+        await db.execute(select(func.count(Violation.id)).filter(Violation.status == "verified"))
+    ).scalar() or 0
+    pending_violations = (
+        await db.execute(select(func.count(Violation.id)).filter(Violation.status == "pending"))
+    ).scalar() or 0
+
+    since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
+    total_vehicles_daily = (
+        await db.execute(
+            select(func.count(Detection.id)).filter(Detection.detected_at >= since_24h)
+        )
+    ).scalar() or 0
+
+    type_counts_result = await db.execute(
+        select(Detection.vehicle_type, func.count(Detection.id))
+        .filter(Detection.detected_at >= since_24h)
+        .group_by(Detection.vehicle_type)
+    )
+    type_counts = {vehicle_type: count for vehicle_type, count in type_counts_result.all()}
+
+    return DashboardOverviewDto(
+        total_vehicles_daily=total_vehicles_daily,
+        total_detections=total_detections,
+        total_violations=total_violations,
+        pending_violations=pending_violations,
+        confirmed_violations=confirmed_violations,
+        motorcycle_count=type_counts.get("motorcycle", 0),
+        car_count=type_counts.get("car", 0),
+        truck_count=type_counts.get("truck", 0),
+        bus_count=type_counts.get("bus", 0),
+        online_cameras=online_cameras,
+        offline_cameras=offline_cameras,
+        total_cameras=total_cameras,
+    )
+
 
 @router.get("/traffic", response_model=List[TimeSeriesStatDto])
 async def get_traffic_stats(
@@ -90,7 +89,6 @@ async def get_traffic_stats(
     db: AsyncSession = Depends(get_db),
     current_operator: Operator = Depends(get_current_operator)
 ):
-    # Try getting from traffic_stats table
     query = select(TrafficStat)
     if camera_id:
         query = query.filter(TrafficStat.camera_id == camera_id)
@@ -98,144 +96,219 @@ async def get_traffic_stats(
         query = query.filter(TrafficStat.hour >= from_date)
     if to_date:
         query = query.filter(TrafficStat.hour <= to_date)
-        
-    query = query.order_by(TrafficStat.hour.asc())
-    result = await db.execute(query)
-    stats = result.scalars().all()
-    
-    response = []
-    for s in stats:
-        response.append(
-            TimeSeriesStatDto(
-                timestamp=s.hour,
-                total_vehicles=s.total_vehicles,
-                car_count=s.car_count,
-                truck_count=s.truck_count,
-                bus_count=s.bus_count,
-                motorcycle_count=s.motorcycle_count,
-                bicycle_count=s.bicycle_count,
-                violation_count=s.violation_count
-            )
-        )
-        
-    # Generate realistic mock chart data if database is empty
-    if not response:
-        now = datetime.now(timezone.utc)
-        for hour_offset in range(12, 0, -1):
-            ts = now - timedelta(hours=hour_offset)
-            response.append(
-                TimeSeriesStatDto(
-                    timestamp=ts,
-                    total_vehicles=120 + hour_offset * 10,
-                    car_count=40 + hour_offset * 3,
-                    truck_count=10 + hour_offset,
-                    bus_count=5,
-                    motorcycle_count=60 + hour_offset * 6,
-                    bicycle_count=5,
-                    violation_count=hour_offset % 3
-                )
-            )
-            
-    return response
 
-@router.get("/violations", response_model=List[ViolationStatDto])
-async def get_violation_stats(
+    result = await db.execute(query.order_by(TrafficStat.hour.asc()))
+    return [
+        TimeSeriesStatDto(
+            timestamp=stat.hour,
+            total_vehicles=stat.total_vehicles,
+            car_count=stat.car_count,
+            truck_count=stat.truck_count,
+            bus_count=stat.bus_count,
+            motorcycle_count=stat.motorcycle_count,
+            bicycle_count=stat.bicycle_count,
+            violation_count=stat.violation_count,
+        )
+        for stat in result.scalars().all()
+    ]
+
+
+@router.get("/vehicles-by-type", response_model=List[VehicleTypeStatDto])
+async def get_vehicle_type_stats(
+    camera_id: Optional[uuid.UUID] = Query(None, alias="cameraId"),
+    vehicle_type: Optional[str] = Query(None, alias="vehicleType"),
+    from_date: Optional[datetime] = Query(None, alias="from"),
+    to_date: Optional[datetime] = Query(None, alias="to"),
     db: AsyncSession = Depends(get_db),
     current_operator: Operator = Depends(get_current_operator)
 ):
-    # Group and count from violations table
-    result = await db.execute(
-        select(Violation.violation_type, func.count(Violation.id))
-        .group_by(Violation.violation_type)
+    query = select(Detection.vehicle_type, func.count(Detection.id)).group_by(Detection.vehicle_type)
+    if camera_id:
+        query = query.filter(Detection.camera_id == camera_id)
+    if vehicle_type:
+        query = query.filter(Detection.vehicle_type == vehicle_type)
+    if from_date:
+        query = query.filter(Detection.detected_at >= from_date)
+    if to_date:
+        query = query.filter(Detection.detected_at <= to_date)
+
+    rows = (await db.execute(query)).all()
+    total = sum(count for _, count in rows)
+    return [
+        VehicleTypeStatDto(
+            vehicle_type=vehicle_type,
+            count=count,
+            percentage=percentage(count, total),
+        )
+        for vehicle_type, count in rows
+    ]
+
+
+@router.get("/violations", response_model=List[ViolationStatDto])
+async def get_violation_stats(
+    camera_id: Optional[uuid.UUID] = Query(None, alias="cameraId"),
+    violation_type: Optional[str] = Query(None, alias="violationType"),
+    review_status: Optional[str] = Query(None, alias="status"),
+    from_date: Optional[datetime] = Query(None, alias="from"),
+    to_date: Optional[datetime] = Query(None, alias="to"),
+    db: AsyncSession = Depends(get_db),
+    current_operator: Operator = Depends(get_current_operator)
+):
+    query = select(Violation.violation_type, func.count(Violation.id)).group_by(Violation.violation_type)
+    if camera_id:
+        query = query.filter(Violation.camera_id == camera_id)
+    if violation_type:
+        query = query.filter(Violation.violation_type == violation_type)
+    if review_status:
+        query = query.filter(Violation.status == review_status)
+    if from_date:
+        query = query.filter(Violation.created_at >= from_date)
+    if to_date:
+        query = query.filter(Violation.created_at <= to_date)
+
+    rows = (await db.execute(query)).all()
+    total = sum(count for _, count in rows)
+    return [
+        ViolationStatDto(
+            violation_type=violation_type,
+            count=count,
+            percentage=percentage(count, total),
+        )
+        for violation_type, count in rows
+    ]
+
+
+@router.get("/violation-status", response_model=List[ViolationStatusStatDto])
+async def get_violation_status_stats(
+    camera_id: Optional[uuid.UUID] = Query(None, alias="cameraId"),
+    violation_type: Optional[str] = Query(None, alias="violationType"),
+    review_status: Optional[str] = Query(None, alias="status"),
+    from_date: Optional[datetime] = Query(None, alias="from"),
+    to_date: Optional[datetime] = Query(None, alias="to"),
+    db: AsyncSession = Depends(get_db),
+    current_operator: Operator = Depends(get_current_operator)
+):
+    query = select(Violation.status, func.count(Violation.id)).group_by(Violation.status)
+    if camera_id:
+        query = query.filter(Violation.camera_id == camera_id)
+    if violation_type:
+        query = query.filter(Violation.violation_type == violation_type)
+    if review_status:
+        query = query.filter(Violation.status == review_status)
+    if from_date:
+        query = query.filter(Violation.created_at >= from_date)
+    if to_date:
+        query = query.filter(Violation.created_at <= to_date)
+
+    rows = (await db.execute(query)).all()
+    counts = {"verified": 0, "pending": 0, "rejected": 0}
+    for review_status, count in rows:
+        counts[review_status or "pending"] = count
+
+    total = sum(counts.values())
+    return [
+        ViolationStatusStatDto(status=status_name, count=count, percentage=percentage(count, total))
+        for status_name, count in counts.items()
+    ]
+
+
+@router.get("/hotspots", response_model=List[ViolationHotspotDto])
+async def get_violation_hotspots(
+    limit: int = Query(10, ge=1, le=100),
+    camera_id: Optional[uuid.UUID] = Query(None, alias="cameraId"),
+    violation_type: Optional[str] = Query(None, alias="violationType"),
+    review_status: Optional[str] = Query(None, alias="status"),
+    from_date: Optional[datetime] = Query(None, alias="from"),
+    to_date: Optional[datetime] = Query(None, alias="to"),
+    db: AsyncSession = Depends(get_db),
+    current_operator: Operator = Depends(get_current_operator)
+):
+    query = select(
+        Camera.id,
+        Camera.name,
+        Camera.intersection,
+        Camera.address,
+        func.count(Violation.id).label("violation_count"),
+        func.max(Violation.created_at).label("latest_violation_at"),
+    ).join(Violation, Violation.camera_id == Camera.id)
+    if camera_id:
+        query = query.filter(Violation.camera_id == camera_id)
+    if violation_type:
+        query = query.filter(Violation.violation_type == violation_type)
+    if review_status:
+        query = query.filter(Violation.status == review_status)
+    if from_date:
+        query = query.filter(Violation.created_at >= from_date)
+    if to_date:
+        query = query.filter(Violation.created_at <= to_date)
+    query = (
+        query
+        .group_by(Camera.id, Camera.name, Camera.intersection, Camera.address)
+        .order_by(func.count(Violation.id).desc(), func.max(Violation.created_at).desc())
+        .limit(limit)
     )
-    rows = result.all()
-    
-    total = sum(row[1] for row in rows)
-    
-    response = []
-    if total > 0:
-        for v_type, count in rows:
-            response.append(
-                ViolationStatDto(
-                    violation_type=v_type,
-                    count=count,
-                    percentage=round((count / total) * 100, 2)
-                )
-            )
-    else:
-        # Default mock statistics
-        mock_data = [
-            ("red_light", 45),
-            ("speeding", 82),
-            ("wrong_lane", 23),
-            ("no_helmet", 121)
-        ]
-        mock_total = sum(item[1] for item in mock_data)
-        for v_type, count in mock_data:
-            response.append(
-                ViolationStatDto(
-                    violation_type=v_type,
-                    count=count,
-                    percentage=round((count / mock_total) * 100, 2)
-                )
-            )
-            
-    return response
+
+    rows = (await db.execute(query)).all()
+    return [
+        ViolationHotspotDto(
+            camera_id=str(camera_id),
+            camera_name=camera_name,
+            location=intersection or address,
+            violation_count=violation_count,
+            latest_violation_at=latest_violation_at,
+        )
+        for camera_id, camera_name, intersection, address, violation_count, latest_violation_at in rows
+    ]
 
 
-@router.get("/camera/{camera_id}/live-metrics")
+@router.get("/camera/{camera_id}/live-metrics", response_model=CameraLiveDto)
 async def get_camera_live_metrics(
     camera_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_operator: Operator = Depends(get_current_operator)
 ):
-    """Live metrics cho từng camera — tương đương GET /api/dashboard/camera/{cameraId}/live-metrics trong ASP.NET."""
-    from app.crud.crud_camera import get_camera
-
-    camera = await get_camera(db, camera_id)
+    camera = await db.get(Camera, camera_id)
     if not camera:
-        from fastapi import HTTPException, status as http_status
         raise HTTPException(
-            status_code=http_status.HTTP_404_NOT_FOUND,
-            detail="Không tìm thấy camera."
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Khong tim thay camera."
         )
 
-    # Count recent detections (last 10 minutes)
     since_10min = datetime.now(timezone.utc) - timedelta(minutes=10)
-    recent_detections = (await db.execute(
-        select(func.count(Detection.id))
-        .filter(Detection.camera_id == camera_id)
-        .filter(Detection.detected_at >= since_10min)
-    )).scalar() or 0
+    recent_detections = (
+        await db.execute(
+            select(func.count(Detection.id))
+            .filter(Detection.camera_id == camera_id)
+            .filter(Detection.detected_at >= since_10min)
+        )
+    ).scalar() or 0
 
-    # Count recent violations (last 10 minutes)
-    recent_violations = (await db.execute(
-        select(func.count(Violation.id))
-        .filter(Violation.camera_id == camera_id)
-        .filter(Violation.created_at >= since_10min)
-    )).scalar() or 0
+    recent_violations = (
+        await db.execute(
+            select(func.count(Violation.id))
+            .filter(Violation.camera_id == camera_id)
+            .filter(Violation.created_at >= since_10min)
+        )
+    ).scalar() or 0
 
-    # Get latest detection
-    latest_detection = (await db.execute(
-        select(Detection)
-        .filter(Detection.camera_id == camera_id)
-        .order_by(Detection.detected_at.desc())
-        .limit(1)
-    )).scalars().first()
+    latest_detection = (
+        await db.execute(
+            select(Detection)
+            .filter(Detection.camera_id == camera_id)
+            .order_by(Detection.detected_at.desc())
+            .limit(1)
+        )
+    ).scalars().first()
 
-    # Calculate traffic rate (vehicles per minute over last 10 min)
-    traffic_rate = round(recent_detections / 10.0, 2) if recent_detections > 0 else 0.0
-
-    return {
-        "cameraId": str(camera_id),
-        "cameraName": camera.name,
-        "status": camera.status,
-        "isOnline": camera.status == "active",
-        "liveTrafficRate": traffic_rate,
-        "recentDetectionsCount": recent_detections,
-        "recentViolationsCount": recent_violations,
-        "lastSeenAt": latest_detection.detected_at.isoformat() if latest_detection else None,
-        "latestVehicleType": latest_detection.vehicle_type if latest_detection else None,
-        "latestConfidence": latest_detection.confidence if latest_detection else 0.0
-    }
-
+    return CameraLiveDto(
+        camera_id=str(camera_id),
+        camera_name=camera.name,
+        status=camera.status,
+        is_online=camera.status == "active",
+        live_traffic_rate=round(recent_detections / 10.0, 2),
+        recent_detections_count=recent_detections,
+        recent_violations_count=recent_violations,
+        last_seen_at=latest_detection.detected_at if latest_detection else None,
+        latest_vehicle_type=latest_detection.vehicle_type if latest_detection else None,
+        latest_confidence=latest_detection.confidence if latest_detection else 0.0,
+    )

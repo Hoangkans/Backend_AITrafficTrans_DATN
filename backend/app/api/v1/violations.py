@@ -29,6 +29,7 @@ def violation_to_dto(violation) -> Dict[str, Any]:
         "confidence": violation.confidence,
         "evidenceUrl": violation.evidence_url,
         "metadata": violation.metadata_ or {},
+        "status": violation.status,
         "isConfirmed": violation.is_confirmed,
         "confirmedBy": str(violation.confirmed_by) if violation.confirmed_by else None,
         "notes": violation.notes,
@@ -44,6 +45,7 @@ async def read_violations(
     camera_id: Optional[uuid.UUID] = Query(None, alias="cameraId"),
     violation_type: Optional[str] = Query(None, alias="violationType"),
     is_confirmed: Optional[bool] = Query(None, alias="isConfirmed"),
+    review_status: Optional[str] = Query(None, alias="status"),
     db: AsyncSession = Depends(get_db),
     current_operator: Operator = Depends(get_current_operator)
 ):
@@ -53,6 +55,7 @@ async def read_violations(
         camera_id=camera_id,
         violation_type=violation_type,
         is_confirmed=is_confirmed,
+        status=review_status,
         skip=skip,
         limit=page_size
     )
@@ -60,7 +63,8 @@ async def read_violations(
         db,
         camera_id=camera_id,
         violation_type=violation_type,
-        is_confirmed=is_confirmed
+        is_confirmed=is_confirmed,
+        status=review_status
     )
     return {
         "data": [violation_to_dto(violation) for violation in violations],
@@ -110,7 +114,8 @@ async def verify_violation(
         db_obj=db_obj,
         operator_id=current_operator.id,
         notes=confirm_data.notes,
-        is_confirmed=confirm_data.is_confirmed
+        is_confirmed=confirm_data.is_confirmed,
+        review_status=confirm_data.status
     )
     await db.commit()
     await db.refresh(violation)

@@ -16,6 +16,7 @@ async def get_violations(
     camera_id: Optional[uuid.UUID] = None,
     violation_type: Optional[str] = None,
     is_confirmed: Optional[bool] = None,
+    status: Optional[str] = None,
     from_date: Optional[datetime] = None,
     to_date: Optional[datetime] = None,
     skip: int = 0,
@@ -28,6 +29,8 @@ async def get_violations(
         query = query.filter(Violation.violation_type == violation_type)
     if is_confirmed is not None:
         query = query.filter(Violation.is_confirmed == is_confirmed)
+    if status:
+        query = query.filter(Violation.status == status)
     if from_date:
         query = query.filter(Violation.created_at >= from_date)
     if to_date:
@@ -41,7 +44,8 @@ async def count_violations(
     db: AsyncSession,
     camera_id: Optional[uuid.UUID] = None,
     violation_type: Optional[str] = None,
-    is_confirmed: Optional[bool] = None
+    is_confirmed: Optional[bool] = None,
+    status: Optional[str] = None
 ) -> int:
     from sqlalchemy import func
     query = select(func.count(Violation.id))
@@ -51,6 +55,8 @@ async def count_violations(
         query = query.filter(Violation.violation_type == violation_type)
     if is_confirmed is not None:
         query = query.filter(Violation.is_confirmed == is_confirmed)
+    if status:
+        query = query.filter(Violation.status == status)
     result = await db.execute(query)
     return result.scalar() or 0
 
@@ -64,6 +70,7 @@ async def create_violation(db: AsyncSession, obj_in: ViolationCreate) -> Violati
         confidence=obj_in.confidence,
         evidence_url=obj_in.evidence_url,
         metadata_=obj_in.metadata or {},
+        status="pending",
         is_confirmed=False
     )
     db.add(db_obj)
@@ -75,9 +82,15 @@ async def confirm_violation(
     db_obj: Violation, 
     operator_id: uuid.UUID, 
     notes: Optional[str] = None, 
-    is_confirmed: bool = True
+    is_confirmed: Optional[bool] = None,
+    review_status: Optional[str] = None
 ) -> Violation:
-    db_obj.is_confirmed = is_confirmed
+    if review_status:
+        db_obj.status = review_status
+        db_obj.is_confirmed = review_status == "verified"
+    elif is_confirmed is not None:
+        db_obj.is_confirmed = is_confirmed
+        db_obj.status = "verified" if is_confirmed else "rejected"
     db_obj.confirmed_by = operator_id
     if notes is not None:
         db_obj.notes = notes
