@@ -16,7 +16,8 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     
     # CORS Origins
-    ALLOWED_ORIGINS: Union[str, List[str]] = ["http://localhost:3000", "http://localhost:5173"]
+    ALLOWED_ORIGINS: Union[str, List[str]] = ["*"]
+
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
@@ -46,13 +47,20 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 587
     SMTP_USERNAME: str = ""
     SMTP_PASSWORD: str = ""
-    SMTP_FROM_EMAIL: str = "no-reply@traffic.local"
+    SMTP_FROM_EMAIL: str = "no-reply@traffic.com"
     SMTP_USE_TLS: bool = True
 
     # YOLO settings
-    YOLO_MODEL_PATH: str = "yolo_models/best.pt"
-    YOLO_CONFIDENCE_THRESHOLD: float = 0.5
+    YOLO_MODEL_PATH: str = "weights/detection.pt"
+    DETECTION_MODEL_PATH: str = "weights/detection.pt"
+    LICENSE_PLATE_MODEL_PATH: str = "weights/license_plate.pt"
+    YOLO_CONFIDENCE_THRESHOLD: float = 0.20
     YOLO_FRAME_SKIP: int = 5
+
+    # OCR settings
+    OCR_LIBRARY: str = "pytesseract"
+    TESSERACT_CMD: str = "tesseract"
+    OCR_LANG: str = "eng"
 
     # URLs
     BACKEND_URL: str = "http://localhost:8000"

@@ -48,3 +48,5 @@ ENV/
 evidence/
 yolo_models/*.pt
 yolo_models/*.onnx
+weights/*.pt
+weights/*.onnx

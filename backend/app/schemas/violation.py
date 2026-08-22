@@ -26,6 +26,11 @@ class ViolationDto(BaseSchema):
     # Optional nested details
     detection: Optional[DetectionDto] = None
 
+import re
+from pydantic import field_validator
+
+VALID_PLATE_RE = re.compile(r'^\d{2}[A-Z]{1,2}-\d{4,5}$')
+
 class ViolationCreate(BaseSchema):
     detection_id: Optional[str] = None
     camera_id: str
@@ -35,6 +40,17 @@ class ViolationCreate(BaseSchema):
     confidence: float
     evidence_url: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+
+    @field_validator('license_plate', mode='before')
+    @classmethod
+    def sanitize_plate(cls, v):
+        if not v or not isinstance(v, str):
+            return None
+        v = v.strip().upper()
+        if not VALID_PLATE_RE.match(v):
+            return None
+        return v
+
 
 class ViolationConfirmRequest(BaseSchema):
     notes: Optional[str] = None

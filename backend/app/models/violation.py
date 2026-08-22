@@ -2,8 +2,11 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import Column, String, Float, Boolean, Text, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.orm import relationship
+import re
+from sqlalchemy.orm import relationship, validates
 from app.core.database import Base
+
+VALID_PLATE_RE = re.compile(r'^\d{2}[A-Z]{1,2}-\d{4,5}$')
 
 class Violation(Base):
     __tablename__ = "violations"
@@ -27,3 +30,12 @@ class Violation(Base):
     camera = relationship("Camera", backref="violations")
     detection = relationship("Detection", backref="violations")
     operator = relationship("Operator", backref="confirmed_violations")
+
+    @validates('license_plate')
+    def validate_license_plate(self, key, value):
+        if not value or not isinstance(value, str):
+            return None
+        val = value.strip().upper()
+        if not VALID_PLATE_RE.match(val):
+            return None
+        return val

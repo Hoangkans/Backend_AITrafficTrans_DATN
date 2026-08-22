@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Union
 from sqlalchemy.future import select
 from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,7 +60,9 @@ async def count_violations(
     result = await db.execute(query)
     return result.scalar() or 0
 
-async def create_violation(db: AsyncSession, obj_in: ViolationCreate) -> Violation:
+async def create_violation(db: AsyncSession, obj_in: Union[ViolationCreate, dict]) -> Violation:
+    if isinstance(obj_in, dict):
+        obj_in = ViolationCreate(**obj_in)
     db_obj = Violation(
         detection_id=uuid.UUID(obj_in.detection_id) if isinstance(obj_in.detection_id, str) else obj_in.detection_id,
         camera_id=uuid.UUID(obj_in.camera_id) if isinstance(obj_in.camera_id, str) else obj_in.camera_id,

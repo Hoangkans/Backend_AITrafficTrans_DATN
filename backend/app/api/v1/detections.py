@@ -26,6 +26,13 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 DETECTION_JOBS: Dict[str, Dict[str, Any]] = {}
 
 
+def get_source_type(file_path: str) -> str:
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in [".mp4", ".avi", ".mov", ".mkv", ".webm"]:
+        return "video"
+    return "image"
+
+
 def detection_to_dto(detection) -> DetectionDto:
     bbox_data = detection.bbox or {}
     return DetectionDto(
@@ -59,97 +66,10 @@ async def process_detection_file(
     file_path: str,
     evidence_filename: str,
 ) -> Dict[str, Any]:
-    try:
-        cam_uuid = uuid.UUID(camera_id)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="ID camera khong hop le.",
-        )
+    from app.services.violation_processor import ViolationProcessor
+    processor = ViolationProcessor()
+    return await processor.process_file(camera_id, file_path)
 
-    camera = await get_camera(db, cam_uuid)
-    if not camera:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Khong tim thay camera.",
-        )
-
-    raw_detections = yolo_service.detect(file_path)
-    saved_detections = []
-    generated_violations = []
-
-    from app.api.v1.websocket import dashboard_manager
-
-    for frame_index, raw_detection in enumerate(raw_detections, start=1):
-        metadata = raw_detection.get("metadata", {})
-        detection_in = DetectionCreate(
-            camera_id=camera_id,
-            frame_id=frame_index,
-            vehicle_type=raw_detection["class_name"],
-            confidence=raw_detection["confidence"],
-            bbox=BoundingBoxDto(**raw_detection["bbox"]),
-            metadata=metadata,
-        )
-
-        db_detection = await create_detection(db, detection_in)
-        saved_detections.append(db_detection)
-
-        speed_limit = camera.config.get("speed_limit", 60)
-        speed = metadata.get("speed_kmh", 0)
-
-        if speed and speed > speed_limit:
-            violation_in = ViolationCreate(
-                detection_id=str(db_detection.id),
-                camera_id=camera_id,
-                violation_type="speeding",
-                vehicle_type=raw_detection["class_name"],
-                license_plate=metadata.get("license_plate"),
-                confidence=raw_detection["confidence"],
-                evidence_url=f"/evidence/{evidence_filename}",
-                metadata={
-                    "speed_kmh": speed,
-                    "speed_limit": speed_limit,
-                    "evidence_file": file_path,
-                },
-            )
-            db_violation = await create_violation(db, violation_in)
-            generated_violations.append(db_violation)
-
-            alert_message = {
-                "type": "violation_alert",
-                "version": 1,
-                "priority": "high",
-                "data": {
-                    "id": str(db_violation.id),
-                    "cameraId": camera_id,
-                    "cameraName": camera.name,
-                    "violationType": "speeding",
-                    "vehicleType": raw_detection["class_name"],
-                    "licensePlate": db_violation.license_plate,
-                    "confidence": db_violation.confidence,
-                    "evidenceUrl": db_violation.evidence_url,
-                    "status": db_violation.status,
-                    "createdAt": db_violation.created_at.isoformat(),
-                },
-            }
-            await dashboard_manager.broadcast(alert_message)
-            await dashboard_manager.send_to_camera_subscribers(camera_id, alert_message)
-
-    return {
-        "success": True,
-        "count": len(saved_detections),
-        "violations_count": len(generated_violations),
-        "detections": [
-            {
-                "id": str(detection.id),
-                "vehicle_type": detection.vehicle_type,
-                "confidence": detection.confidence,
-                "bbox": detection.bbox,
-                "metadata": detection.metadata_,
-            }
-            for detection in saved_detections
-        ],
-    }
 
 
 async def run_detection_job(
@@ -165,28 +85,29 @@ async def run_detection_job(
             "updatedAt": datetime.now(timezone.utc).isoformat(),
         }
     )
-    async with AsyncSessionLocal() as db:
-        try:
-            result = await process_detection_file(db, camera_id, file_path, evidence_filename)
-            await db.commit()
-            DETECTION_JOBS[job_id].update(
-                {
-                    "status": "completed",
-                    "progress": 100,
-                    "result": result,
-                    "updatedAt": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-        except Exception as exc:
-            await db.rollback()
-            DETECTION_JOBS[job_id].update(
-                {
-                    "status": "failed",
-                    "progress": 100,
-                    "error": str(exc),
-                    "updatedAt": datetime.now(timezone.utc).isoformat(),
-                }
-            )
+    try:
+        # Use ViolationProcessor for the full pipeline:
+        # YOLO detect → crop xe → license_plate_model (if available) → OCR → normalize
+        from app.services.violation_processor import ViolationProcessor
+        processor = ViolationProcessor()
+        result = await processor.process_file(camera_id, file_path)
+        DETECTION_JOBS[job_id].update(
+            {
+                "status": "completed",
+                "progress": 100,
+                "result": result,
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+    except Exception as exc:
+        DETECTION_JOBS[job_id].update(
+            {
+                "status": "failed",
+                "progress": 100,
+                "error": str(exc),
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
 
 @router.get("", response_model=Dict[str, Any])
@@ -233,7 +154,11 @@ async def upload_and_detect(
     current_operator: Operator = Depends(get_current_operator),
 ):
     filename, file_path = save_upload_file(file)
-    result = await process_detection_file(db, camera_id, file_path, filename)
+    # New synchronous processing using ViolationProcessor
+    from app.services.violation_processor import ViolationProcessor
+    processor = ViolationProcessor()
+    result = await processor.process_file(camera_id, file_path)
+    # Commit any DB changes performed inside the processor
     await db.commit()
     return result
 

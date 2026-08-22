@@ -7,6 +7,7 @@ from app.api.v1.stats import router as stats_router
 from app.api.v1.users import router as users_router
 from app.api.v1.settings import router as settings_router
 from app.api.v1.websocket import router as websocket_router
+from app.api.v1.admin_utils import router as admin_utils_router
 
 api_router = APIRouter()
 
@@ -19,4 +20,4 @@ api_router.include_router(violations_router, prefix="/violations", tags=["Violat
 api_router.include_router(stats_router, prefix="/stats", tags=["Statistics"])
 api_router.include_router(settings_router, prefix="/settings", tags=["Settings"])
 api_router.include_router(websocket_router, tags=["WebSockets"])
-
+api_router.include_router(admin_utils_router, tags=["Admin Utilities"])
