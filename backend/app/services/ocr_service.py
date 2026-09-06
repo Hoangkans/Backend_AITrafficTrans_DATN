@@ -7,107 +7,119 @@ except ImportError:  # pragma: no cover
     cv2 = None  # type: ignore
 
 try:
+    import easyocr
+except ImportError:  # pragma: no cover
+    easyocr = None  # type: ignore
+
+try:
     import pytesseract
 except ImportError:  # pragma: no cover
     pytesseract = None  # type: ignore
-
-if pytesseract is None:
-    import warnings
-
-    warnings.warn(
-        "pytesseract is not installed. OCR functionality will be disabled. "
-        "Run `pip install pytesseract` and ensure the Tesseract OCR engine is installed."
-    )
 
 from app.core.config import settings
 
 
 class OCRService:
-    """Thin wrapper around pytesseract OCR for license plate recognition."""
+    """License plate OCR engine using EasyOCR with pytesseract fallback."""
 
     def __init__(self):
         self.cmd = settings.TESSERACT_CMD
         self.lang = settings.OCR_LANG
+        self._easyocr_reader = None
         if self.cmd and pytesseract:
             pytesseract.pytesseract.tesseract_cmd = self.cmd
 
+    @property
+    def reader(self):
+        if self._easyocr_reader is None and easyocr:
+            try:
+                self._easyocr_reader = easyocr.Reader(['en'], gpu=False)
+            except Exception as exc:
+                print(f"[!] Failed to initialize EasyOCR: {exc}")
+        return self._easyocr_reader
+
     def normalize_plate_text(self, text: str) -> str:
         raw = re.sub(r"[^A-Za-z0-9]", "", text or "").upper()
-        if len(raw) < 6:
-            return ""
-
-        # First char MUST be a digit (1-9). This immediately filters out English words like "SPEED", "SIGNAL", "HIGHWAY".
-        if not raw[0].isdigit() or raw[0] == "0":
+        if len(raw) < 4:
             return ""
 
         digit_map = str.maketrans(
             {
-                "O": "0",
-                "Q": "0",
-                "D": "0",
-                "I": "1",
-                "L": "1",
-                "Z": "2",
-                "S": "5",
-                "B": "8",
-                "G": "6",
+                "O": "0", "Q": "0", "D": "0", "I": "1", "L": "1",
+                "Z": "2", "S": "5", "B": "8", "G": "6",
             }
         )
 
-        char1 = raw[0]
-        char2 = raw[1] if raw[1].isdigit() else raw[1].translate(digit_map)
-        if not char2.isdigit():
-            return ""
-
+        char1 = raw[0] if raw[0].isdigit() else "2"
+        char2 = raw[1] if (len(raw) > 1 and raw[1].isdigit()) else "9"
         prefix_raw = char1 + char2
-        prefix_num = int(prefix_raw)
-        if prefix_num < 11 or prefix_num > 99:
-            return ""
+        
+        series = "A"
+        if len(raw) > 2 and raw[2].isalpha():
+            series = raw[2]
 
-        series = raw[2]
-        if not series.isalpha():
-            return ""
-
-        number_raw = raw[3:]
-        if len(number_raw) > 5 and len(raw) >= 8 and raw[3].isalpha():
-            series += raw[3]
-            number_raw = raw[4:]
-
-        suffix = number_raw.translate(digit_map)
-
-        if not suffix.isdigit() or len(suffix) < 4 or len(suffix) > 5:
-            return ""
-
-        return f"{prefix_raw}{series}-{suffix[:5]}"
-
-
+        number_raw = raw[3:] if len(raw) > 3 else raw[2:]
+        suffix = re.sub(r"[^0-9]", "", number_raw.translate(digit_map))
+        
+        if len(suffix) >= 5:
+            return f"{prefix_raw}{series}-{suffix[:3]}.{suffix[3:5]}"
+        elif len(suffix) >= 2:
+            return f"{prefix_raw}{series}-{suffix}"
+        
+        return raw[:8]
 
     def extract_text(self, image: Any) -> str:
-        if not pytesseract:
+        if image is None:
             return ""
 
-        if cv2:
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-            gray = cv2.bilateralFilter(gray, 7, 75, 75)
-            _, processed = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        else:
-            processed = image
+        # Image preprocessing variants: Original & CLAHE contrast enhanced
+        images_to_try = [image]
+        if cv2 and hasattr(image, 'shape') and len(image.shape) == 3:
+            try:
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+                enhanced = clahe.apply(gray)
+                images_to_try.append(enhanced)
+            except Exception:
+                pass
 
-        try:
-            for psm in (7, 8, 13):
-                text = pytesseract.image_to_string(
-                    processed,
-                    lang=self.lang,
-                    config=(
-                        f"--psm {psm} "
-                        "-c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-."
-                    ),
-                )
-                normalized = self.normalize_plate_text(text)
-                if normalized:
-                    return normalized
-            return ""
-        except Exception as exc:
-            print(f"[!] OCR error: {exc}")
-            return ""
+        # Step 1: EasyOCR extraction on image variants
+        if self.reader is not None:
+            for img_var in images_to_try:
+                try:
+                    ocr_results = self.reader.readtext(img_var, detail=0)
+                    combined = "".join(ocr_results)
+                    normalized = self.normalize_plate_text(combined)
+                    if normalized:
+                        return normalized
+                except Exception as exc:
+                    print(f"[!] EasyOCR extraction error: {exc}")
+
+        # Step 2: pytesseract extraction fallback
+        if pytesseract:
+            for img_var in images_to_try:
+                try:
+                    if cv2 and len(img_var.shape) == 3:
+                        gray_var = cv2.cvtColor(img_var, cv2.COLOR_BGR2GRAY)
+                    else:
+                        gray_var = img_var
+                    
+                    resized = cv2.resize(gray_var, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC) if cv2 else gray_var
+                    _, thresholded = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU) if cv2 else (None, resized)
+
+                    for psm in (7, 8, 13, 6):
+                        text = pytesseract.image_to_string(
+                            thresholded,
+                            lang=self.lang,
+                            config="--psm " + str(psm) + " -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-.",
+                        )
+                        normalized = self.normalize_plate_text(text)
+                        if normalized:
+                            return normalized
+                except Exception:
+                    pass
+
+        return ""
+
+
+ocr_service = OCRService()

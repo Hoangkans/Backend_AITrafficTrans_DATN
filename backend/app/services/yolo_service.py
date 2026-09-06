@@ -29,14 +29,33 @@ class YOLOService:
         detection_model_path: str = None,
         license_plate_model_path: str = None
     ):
-        self.detection_model_path = detection_model_path or getattr(settings, "DETECTION_MODEL_PATH", settings.YOLO_MODEL_PATH)
-        self.license_plate_model_path = license_plate_model_path or getattr(settings, "LICENSE_PLATE_MODEL_PATH", "weights/license_plate.pt")
+        det_candidates = [
+            detection_model_path,
+            getattr(settings, "DETECTION_MODEL_PATH", None),
+            getattr(settings, "YOLO_MODEL_PATH", None),
+            "Detection.pt",
+            "weights/Detection.pt",
+            "weights/detection.pt",
+            "best.pt",
+            "yolov8s.pt",
+        ]
+        self.detection_model_path = next((p for p in det_candidates if p and os.path.exists(p)), "Detection.pt")
+
+        lp_candidates = [
+            license_plate_model_path,
+            getattr(settings, "LICENSE_PLATE_MODEL_PATH", None),
+            "License_Plate.pt",
+            "weights/License_Plate.pt",
+            "weights/license_plate.pt",
+        ]
+        self.license_plate_model_path = next((p for p in lp_candidates if p and os.path.exists(p)), "License_Plate.pt")
 
         self.detection_model = None
         self.license_plate_model = None
+        self.helmet_model = None
         self.model_available = False
 
-        # Load Detection Model (detection.pt — 10 classes)
+        # Load Detection Model (Detection.pt — 10 classes)
         if os.path.exists(self.detection_model_path):
             try:
                 from ultralytics import YOLO
@@ -45,20 +64,39 @@ class YOLOService:
                 names = list(self.detection_model.names.values())
                 print(f"[+] Detection Model loaded: {self.detection_model_path} | classes={names}")
             except Exception as e:
-                print(f"[!] Failed to load Detection model: {e}. Fallback detection mode enabled.")
+                print(f"[!] Failed to load Detection model at '{self.detection_model_path}': {e}. Fallback mode enabled.")
         else:
             print(f"[!] Detection Model file not found at '{self.detection_model_path}'. Fallback mode enabled.")
 
-        # Load License Plate Model (license_plate.pt — 1 class: license_plate)
+        # Load License Plate Model (License_Plate.pt — 1 class: license_plate)
         if os.path.exists(self.license_plate_model_path):
             try:
                 from ultralytics import YOLO
                 self.license_plate_model = YOLO(self.license_plate_model_path)
-                print(f"[+] License Plate Model loaded: {self.license_plate_model_path}")
+                print(f"[+] License Plate Model loaded: {self.license_plate_model_path} | classes={list(self.license_plate_model.names.values())}")
             except Exception as e:
-                print(f"[!] Failed to load License Plate model: {e}")
+                print(f"[!] Failed to load License Plate model at '{self.license_plate_model_path}': {e}")
         else:
             print(f"[*] License Plate Model not found at '{self.license_plate_model_path}'.")
+
+        # Load Helmet Fine-tuned Model (Helmet_fine_tune.pt — 2 classes: Helmet, No Helmet)
+        helmet_candidates = [
+            "Helmet_fine_tune.pt",
+            "weights/Helmet_fine_tune.pt",
+            "Helmet.pt",
+            "weights/Helmet.pt",
+            "weights/helmet.pt"
+        ]
+        helmet_path = next((p for p in helmet_candidates if os.path.exists(p)), None)
+        if helmet_path:
+            try:
+                from ultralytics import YOLO
+                self.helmet_model = YOLO(helmet_path)
+                print(f"[+] Helmet Model (Fine-tuned) loaded: {helmet_path} | classes={self.helmet_model.names}")
+            except Exception as e:
+                print(f"[!] Failed to load Helmet model at '{helmet_path}': {e}")
+        else:
+            print(f"[*] Helmet Model file not found in candidate paths.")
 
         # Backward compat alias
         self.model = self.detection_model
@@ -119,6 +157,65 @@ class YOLOService:
             "metadata": meta,
         }
 
+    def _create_byte_tracker(self):
+        """Instantiate a persistent ByteTrack tracker configured for traffic tracking."""
+        try:
+            from ultralytics.trackers.byte_tracker import BYTETracker
+            from ultralytics.utils import IterableSimpleNamespace
+            args = IterableSimpleNamespace(
+                track_high_thresh=getattr(settings, "YOLO_CONFIDENCE_THRESHOLD", 0.45),
+                track_low_thresh=0.10,
+                new_track_thresh=0.50,
+                track_buffer=30,
+                match_thresh=0.80,
+                tracker_type="bytetrack",
+                fuse_score=True,
+            )
+            return BYTETracker(args)
+        except Exception as e:
+            print(f"[!] Failed to initialize BYTETracker: {e}")
+            return None
+
+    def _build_detection_from_coords(
+        self,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        conf: float,
+        cls_id: int,
+        model_names: Dict[int, str],
+        img_w: int,
+        img_h: int,
+        track_id: Optional[int] = None,
+        time_sec: float = 0.0,
+        detection_mode: str = "DETECT",
+        interval: float = 0.10,
+    ) -> Dict[str, Any]:
+        raw_label = model_names.get(cls_id, "unknown")
+        norm = self._normalize_class(raw_label)
+        bbox_pct = self._bbox_to_pct(x1, y1, x2, y2, img_w, img_h)
+
+        meta: Dict[str, Any] = {
+            "speed_kmh": None,
+            "object_group": norm["group"],
+            "time": time_sec,
+            "detection_mode": f"YOLO: {detection_mode}",
+            "detection_interval": interval,
+        }
+        if track_id is not None:
+            meta["track_id"] = track_id
+
+        return {
+            "class_id": cls_id,
+            "class_name": norm["type"],
+            "object_group": norm["group"],
+            "confidence": round(conf, 2),
+            "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+            "bbox_pct": bbox_pct,
+            "metadata": meta,
+        }
+
     # ─────────────────────────────────────────────────────────────────────────
     # Public API
     # ─────────────────────────────────────────────────────────────────────────
@@ -127,7 +224,7 @@ class YOLOService:
         """
         Run detection on an image or video file.
         Returns unified detection dicts for ALL 10 classes (vehicles + persons + infrastructure).
-        Video mode uses ByteTrack for consistent track_ids across frames.
+        Video mode uses time-interval YOLO detection (10 FPS) + persistent ByteTrack tracking (30 FPS).
         """
         threshold = conf_threshold or settings.YOLO_CONFIDENCE_THRESHOLD
 
@@ -142,44 +239,89 @@ class YOLOService:
                 detections: List[Dict[str, Any]] = []
 
                 if is_video:
-                    # Video mode: ByteTrack tracking across frames
-                    frame_count = 0
-                    skip_interval = max(5, getattr(settings, "YOLO_FRAME_SKIP", 5))
                     try:
-                        results = self.detection_model.track(
-                            source=image_data_or_path,
-                            tracker="bytetrack.yaml",
-                            stream=True,
-                            conf=threshold,
-                            imgsz=1280,
-                            vid_stride=skip_interval,
-                            persist=True,
-                        )
-                    except Exception as track_err:
-                        print(f"[!] ByteTrack error, fallback to standard detect: {track_err}")
-                        results = self.detection_model(
-                            image_data_or_path, stream=True, conf=threshold, imgsz=1280, vid_stride=skip_interval
-                        )
+                        import cv2
+                        from ultralytics.trackers.byte_tracker import STrack
+                    except ImportError:
+                        cv2 = None
 
+                    if cv2 and isinstance(image_data_or_path, str) and os.path.exists(image_data_or_path):
+                        cap = cv2.VideoCapture(image_data_or_path)
+                        if cap.isOpened():
+                            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+                            det_interval = getattr(settings, "DETECTION_INTERVAL", 0.10)
+                            tracker = self._create_byte_tracker()
+
+                            last_det_time = -999.0
+                            frame_idx = 0
+
+                            while True:
+                                ret, frame = cap.read()
+                                if not ret or frame is None:
+                                    break
+
+                                frame_idx += 1
+                                if frame_idx > 1800:
+                                    break
+
+                                time_sec = round(frame_idx / fps, 3)
+                                img_h, img_w = frame.shape[:2]
+
+                                should_detect = (time_sec - last_det_time) >= (det_interval - 0.001)
+
+                                if should_detect:
+                                    last_det_time = time_sec
+                                    # 1. Run YOLO inference ONLY on time interval (~0.1s)
+                                    results = self.detection_model(frame, conf=threshold, verbose=True)
+                                    boxes = results[0].boxes if (results and len(results) > 0) else None
+
+                                    # 2. Update persistent BYTETracker with YOLO detections
+                                    tracked_boxes_set = set()
+                                    if tracker is not None and boxes is not None and len(boxes) > 0:
+                                        tracks = tracker.update(boxes)
+                                        for tr in tracks:
+                                            x1, y1, x2, y2 = int(tr[0]), int(tr[1]), int(tr[2]), int(tr[3])
+                                            tid = int(tr[4])
+                                            conf = float(tr[5])
+                                            cls_id = int(tr[6])
+                                            tracked_boxes_set.add((x1, y1, x2, y2))
+                                            det = self._build_detection_from_coords(
+                                                x1, y1, x2, y2, conf, cls_id, self.detection_model.names,
+                                                img_w, img_h, track_id=tid, time_sec=time_sec,
+                                                detection_mode="DETECT", interval=det_interval
+                                            )
+                                            detections.append(det)
+
+                                    # Capture untracked raw YOLO boxes (static traffic lights, signs, or objects not in ByteTrack tracks)
+                                    if boxes is not None:
+                                        for box in boxes:
+                                            xyxy = box.xyxy[0].tolist()
+                                            bx1, by1, bx2, by2 = int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])
+                                            bconf = float(box.conf[0])
+                                            bcls_id = int(box.cls[0])
+                                            # If this box wasn't already added by ByteTrack
+                                            if (bx1, by1, bx2, by2) not in tracked_boxes_set:
+                                                det = self._build_detection_from_coords(
+                                                    bx1, by1, bx2, by2, bconf, bcls_id, self.detection_model.names,
+                                                    img_w, img_h, track_id=None, time_sec=time_sec,
+                                                    detection_mode="RAW_YOLO", interval=det_interval
+                                                )
+                                                detections.append(det)
+
+                            cap.release()
+                            return self._deduplicate_detections(detections)
+
+                    # Fallback if cv2 read is unavailable
+                    results = self.detection_model(image_data_or_path, conf=threshold)
                     for r in results:
-                        frame_count += skip_interval
-                        if frame_count > 900:
-                            break
-
-                        time_sec = round(frame_count / 30.0, 2)
                         img_h, img_w = r.orig_shape if (hasattr(r, "orig_shape") and r.orig_shape) else (720, 1280)
                         boxes = getattr(r, "boxes", [])
                         if boxes is None:
                             continue
-
                         for box in boxes:
-                            tid = int(box.id[0]) if hasattr(box, "id") and box.id is not None else None
-                            det = self._build_detection(
-                                box, self.detection_model.names, img_w, img_h, track_id=tid, time_sec=time_sec
-                            )
+                            det = self._build_detection(box, self.detection_model.names, img_w, img_h)
                             detections.append(det)
-
-                    detections = self._deduplicate_detections(detections)
+                    return self._deduplicate_detections(detections)
 
                 else:
                     # Image mode
@@ -337,24 +479,36 @@ class YOLOService:
                 untracked.append(d)
 
         deduped = []
+        min_conf = getattr(settings, "YOLO_CONFIDENCE_THRESHOLD", 0.45)
+
         for t_id, group in track_groups.items():
-            best = dict(max(group, key=lambda item: item.get("confidence", 0)))
-            sorted_group = sorted(group, key=lambda item: item.get("metadata", {}).get("time", 0))
+            max_conf = max(item.get("confidence", 0.0) for item in group)
+            if max_conf < min_conf:
+                continue
+
+            sorted_group = sorted(group, key=lambda item: item.get("metadata", {}).get("time", 0.0))
+            best = dict(sorted_group[0])
+
             history = [
                 {
                     "time": item.get("metadata", {}).get("time", 0.0),
-                    "box": item.get("bbox_pct", {})
+                    "box": item.get("bbox_pct") or {}
                 }
                 for item in sorted_group
-                if item.get("bbox_pct")
             ]
+            best["confidence"] = round(max_conf, 2)
             best["metadata"] = dict(best.get("metadata", {}))
             best["metadata"]["history"] = history
+            best["metadata"]["tracked_frames"] = len(group)
             deduped.append(best)
 
-        # For untracked detections, perform IoU NMS suppression (threshold > 0.35)
+        # For untracked detections, perform IoU NMS suppression (threshold > 0.35) & confidence >= min_conf
         untracked_deduped = []
-        sorted_untracked = sorted(untracked, key=lambda item: item.get("confidence", 0), reverse=True)
+        sorted_untracked = sorted(
+            [d for d in untracked if d.get("confidence", 0) >= min_conf],
+            key=lambda item: item.get("confidence", 0),
+            reverse=True
+        )
         for d in sorted_untracked:
             box = d.get("bbox", {})
             cls_name = d.get("class_name")

@@ -36,7 +36,7 @@ async def get_current_operator(
                     pass
 
     # Seamless fallback to default active operator in DB to prevent broken sessions
-    from sqlalchemy.future import select
+    from sqlalchemy import select
     result = await db.execute(select(Operator).filter(Operator.is_active == True))
     admin_op = result.scalars().first()
     if admin_op:

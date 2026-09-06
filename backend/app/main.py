@@ -12,6 +12,7 @@ from app.models import base
 from app.api.v1.router import api_router
 from app.core.security import get_password_hash
 from app.models.operator import Operator
+# pyrefly: ignore [missing-import]
 from sqlalchemy import text, select
 
 import uuid
@@ -138,9 +139,31 @@ async def lifespan(app: FastAPI):
                 session.add(default_cam)
                 await session.commit()
                 print("[+] Default camera seeded successfully.")
+            # Seed default notification if none exists
+            from app.models.notification import Notification
+            notif_result = await session.execute(select(Notification))
+            if not notif_result.scalars().first():
+                print("[*] Seeding sample notifications...")
+                n1 = Notification(
+                    title="Hệ thống khởi động thành công",
+                    message="Máy chủ giám sát giao thông AI đã sẵn sàng hoạt động.",
+                    type="system",
+                    is_read=False
+                )
+                n2 = Notification(
+                    title="Phát hiện vi phạm mới",
+                    message="Camera Ngã tư Nguyễn Huệ vừa ghi nhận phương tiện 51A-99999 vượt đèn đỏ.",
+                    type="violation",
+                    reference_id="demo-violation-1",
+                    is_read=False
+                )
+                session.add_all([n1, n2])
+                await session.commit()
+                print("[+] Sample notifications seeded successfully.")
         except Exception as e:
             print(f"[-] Error seeding database: {e}")
             await session.rollback()
+
 
     yield
     # Shutdown

@@ -50,12 +50,14 @@ class Settings(BaseSettings):
     SMTP_FROM_EMAIL: str = "no-reply@traffic.com"
     SMTP_USE_TLS: bool = True
 
-    # YOLO settings
-    YOLO_MODEL_PATH: str = "weights/detection.pt"
-    DETECTION_MODEL_PATH: str = "weights/detection.pt"
-    LICENSE_PLATE_MODEL_PATH: str = "weights/license_plate.pt"
-    YOLO_CONFIDENCE_THRESHOLD: float = 0.20
-    YOLO_FRAME_SKIP: int = 5
+    # YOLO & ByteTrack settings
+    YOLO_MODEL_PATH: str = "Detection.pt"
+    DETECTION_MODEL_PATH: str = "Detection.pt"
+    LICENSE_PLATE_MODEL_PATH: str = "License_Plate.pt"
+    YOLO_CONFIDENCE_THRESHOLD: float = 0.45
+    DETECTION_FPS: float = 10.0
+    DETECTION_INTERVAL: float = 0.10
+    YOLO_FRAME_SKIP: int = 2
 
     # OCR settings
     OCR_LIBRARY: str = "pytesseract"
