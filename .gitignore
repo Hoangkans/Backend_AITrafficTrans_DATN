@@ -28,6 +28,8 @@ yarn-error.log*
 *.sqlite
 backend/static/evidence/*
 !backend/static/evidence/.gitkeep
+backend/static/processed_videos/*
+!backend/static/processed_videos/.gitkeep
 backend/yolo_models/*.pt
 backend/yolo_models/*.onnx
 
