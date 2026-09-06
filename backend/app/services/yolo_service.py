@@ -278,19 +278,23 @@ class YOLOService:
                                     # 2. Update persistent BYTETracker with YOLO detections
                                     tracked_boxes_set = set()
                                     if tracker is not None and boxes is not None and len(boxes) > 0:
-                                        tracks = tracker.update(boxes)
-                                        for tr in tracks:
-                                            x1, y1, x2, y2 = int(tr[0]), int(tr[1]), int(tr[2]), int(tr[3])
-                                            tid = int(tr[4])
-                                            conf = float(tr[5])
-                                            cls_id = int(tr[6])
-                                            tracked_boxes_set.add((x1, y1, x2, y2))
-                                            det = self._build_detection_from_coords(
-                                                x1, y1, x2, y2, conf, cls_id, self.detection_model.names,
-                                                img_w, img_h, track_id=tid, time_sec=time_sec,
-                                                detection_mode="DETECT", interval=det_interval
-                                            )
-                                            detections.append(det)
+                                        try:
+                                            tracks = tracker.update(boxes)
+                                            for tr in tracks:
+                                                x1, y1, x2, y2 = int(tr[0]), int(tr[1]), int(tr[2]), int(tr[3])
+                                                tid = int(tr[4])
+                                                conf = float(tr[5])
+                                                cls_id = int(tr[6])
+                                                tracked_boxes_set.add((x1, y1, x2, y2))
+                                                det = self._build_detection_from_coords(
+                                                    x1, y1, x2, y2, conf, cls_id, self.detection_model.names,
+                                                    img_w, img_h, track_id=tid, time_sec=time_sec,
+                                                    detection_mode="DETECT", interval=det_interval
+                                                )
+                                                detections.append(det)
+                                        except Exception as tracker_err:
+                                            print(f"[!] BYTETracker update warning: {tracker_err}")
+                                            tracker = None
 
                                     # Capture untracked raw YOLO boxes (static traffic lights, signs, or objects not in ByteTrack tracks)
                                     if boxes is not None:
