@@ -34,6 +34,21 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def assemble_database_url(cls, v: str) -> str:
+        if isinstance(v, str):
+            if v.startswith("postgres://"):
+                v = v.replace("postgres://", "postgresql+asyncpg://", 1)
+            elif v.startswith("postgresql://") and not v.startswith("postgresql+"):
+                v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+            
+            # Clean up query parameters for asyncpg compatibility (e.g. Neon DB links)
+            v = v.replace("sslmode=require", "ssl=require")
+            v = v.replace("&channel_binding=require", "").replace("channel_binding=require&", "").replace("channel_binding=require", "")
+        return v
+
+
     # JWT Security
     SECRET_KEY: str = "your-super-secret-key-at-least-32-characters-long"
     ALGORITHM: str = "HS256"
