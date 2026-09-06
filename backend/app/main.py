@@ -210,10 +210,10 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": str(exc) or "Internal Server Error"},
     )
 
-# Mount static folder for serving violation evidence images
-evidence_dir = "static/evidence"
-os.makedirs(evidence_dir, exist_ok=True)
+# Mount static folder for serving violation evidence images & static assets
+os.makedirs("static/evidence", exist_ok=True)
 app.mount("/evidence", StaticFiles(directory="static/evidence"), name="evidence")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Include routers - mount under both /api and /api/v1 for maximum client compatibility
 app.include_router(api_router, prefix="/api")
