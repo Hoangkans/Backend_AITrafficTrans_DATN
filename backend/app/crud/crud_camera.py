@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional, List
-from sqlalchemy.future import select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.camera import Camera
 from app.schemas.camera import CreateCameraRequest, UpdateCameraRequest

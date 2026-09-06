@@ -1,8 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional, List, Union
-from sqlalchemy.future import select
-from sqlalchemy import or_
+from sqlalchemy import select, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.violation import Violation
 from app.schemas.violation import ViolationCreate
@@ -26,7 +25,7 @@ async def get_violations(
     if camera_id:
         query = query.filter(Violation.camera_id == camera_id)
     if violation_type:
-        query = query.filter(Violation.violation_type == violation_type)
+        query = query.filter(func.lower(Violation.violation_type) == violation_type.lower())
     if is_confirmed is not None:
         query = query.filter(Violation.is_confirmed == is_confirmed)
     if status:
@@ -52,7 +51,7 @@ async def count_violations(
     if camera_id:
         query = query.filter(Violation.camera_id == camera_id)
     if violation_type:
-        query = query.filter(Violation.violation_type == violation_type)
+        query = query.filter(func.lower(Violation.violation_type) == violation_type.lower())
     if is_confirmed is not None:
         query = query.filter(Violation.is_confirmed == is_confirmed)
     if status:
@@ -101,17 +100,20 @@ async def confirm_violation(
     return db_obj
 
 async def search_violations_by_license_plate(db: AsyncSession, q: str, skip: int = 0, limit: int = 100) -> List[Violation]:
-    # Basic search on license plate or notes
-    result = await db.execute(
-        select(Violation)
-        .filter(
-            or_(
-                Violation.license_plate.ilike(f"%{q}%"),
-                Violation.notes.ilike(f"%{q}%")
-            )
+    import re
+    cleaned_q = re.sub(r"[^A-Za-z0-9]", "", q).upper() if q else ""
+    pattern = f"%{q.strip()}%"
+    cleaned_pattern = f"%{cleaned_q}%" if cleaned_q else pattern
+
+    query = select(Violation).filter(
+        or_(
+            Violation.license_plate.ilike(pattern),
+            Violation.violation_type.ilike(pattern),
+            Violation.vehicle_type.ilike(pattern),
+            Violation.notes.ilike(pattern),
+            func.replace(func.replace(Violation.license_plate, "-", ""), ".", "").ilike(cleaned_pattern),
         )
-        .order_by(Violation.created_at.desc())
-        .offset(skip)
-        .limit(limit)
-    )
+    ).order_by(Violation.created_at.desc()).offset(skip).limit(limit)
+
+    result = await db.execute(query)
     return list(result.scalars().all())

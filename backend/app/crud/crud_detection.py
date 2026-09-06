@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional, List
-from sqlalchemy.future import select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.detection import Detection
 from app.schemas.detection import DetectionCreate
