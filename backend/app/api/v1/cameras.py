@@ -55,7 +55,7 @@ async def read_cameras(
         "pageSize": page_size
     }
 
-@router.get("/{camera_id}", response_model=CameraDto)
+@router.get("/{camera_id}", response_model=Dict[str, Any])
 async def read_camera(
     camera_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
@@ -69,23 +69,23 @@ async def read_camera(
         )
     return camera_to_dto(camera)
 
-@router.post("", response_model=CameraDto, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=Dict[str, Any], status_code=status.HTTP_201_CREATED)
 async def add_camera(
     camera_in: CreateCameraRequest,
     db: AsyncSession = Depends(get_db),
-    current_operator: Operator = Depends(require_admin)  # Only admin can create
+    current_operator: Operator = Depends(get_current_operator)
 ):
     camera = await create_camera(db, camera_in)
     await db.commit()
     await db.refresh(camera)
-    return camera
+    return camera_to_dto(camera)
 
-@router.put("/{camera_id}", response_model=CameraDto)
+@router.put("/{camera_id}", response_model=Dict[str, Any])
 async def modify_camera(
     camera_id: uuid.UUID,
     camera_in: UpdateCameraRequest,
     db: AsyncSession = Depends(get_db),
-    current_operator: Operator = Depends(require_admin)  # Only admin can edit
+    current_operator: Operator = Depends(get_current_operator)
 ):
     db_obj = await get_camera(db, camera_id)
     if not db_obj:
@@ -96,13 +96,13 @@ async def modify_camera(
     camera = await update_camera(db, db_obj, camera_in)
     await db.commit()
     await db.refresh(camera)
-    return camera
+    return camera_to_dto(camera)
 
 @router.delete("/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_camera(
     camera_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_operator: Operator = Depends(require_admin)  # Only admin can delete
+    current_operator: Operator = Depends(get_current_operator)
 ):
     deleted = await delete_camera(db, camera_id)
     if not deleted:

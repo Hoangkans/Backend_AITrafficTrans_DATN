@@ -8,6 +8,9 @@ from app.api.v1.users import router as users_router
 from app.api.v1.settings import router as settings_router
 from app.api.v1.websocket import router as websocket_router
 from app.api.v1.admin_utils import router as admin_utils_router
+from app.api.v1.notifications import router as notifications_router
+from app.api.v1.reports import router as reports_router
+from app.api.v1.map import router as map_router
 
 api_router = APIRouter()
 
@@ -19,5 +22,9 @@ api_router.include_router(detections_router, prefix="/detections", tags=["Detect
 api_router.include_router(violations_router, prefix="/violations", tags=["Violations"])
 api_router.include_router(stats_router, prefix="/stats", tags=["Statistics"])
 api_router.include_router(settings_router, prefix="/settings", tags=["Settings"])
+api_router.include_router(notifications_router, prefix="/notifications", tags=["Notifications"])
+api_router.include_router(reports_router, prefix="/reports", tags=["Reports Export"])
+api_router.include_router(map_router, prefix="/map", tags=["Map & Geocoding"])
 api_router.include_router(websocket_router, tags=["WebSockets"])
 api_router.include_router(admin_utils_router, tags=["Admin Utilities"])
+

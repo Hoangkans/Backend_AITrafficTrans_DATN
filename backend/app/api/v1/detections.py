@@ -157,9 +157,7 @@ async def upload_and_detect(
     # New synchronous processing using ViolationProcessor
     from app.services.violation_processor import ViolationProcessor
     processor = ViolationProcessor()
-    result = await processor.process_file(camera_id, file_path)
-    # Commit any DB changes performed inside the processor
-    await db.commit()
+    result = await processor.process_file(camera_id, file_path, db=db)
     return result
 
 
