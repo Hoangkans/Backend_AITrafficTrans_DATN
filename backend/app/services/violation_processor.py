@@ -97,8 +97,8 @@ class ViolationProcessor:
         Returns tuple of (is_wrong_lane, lane_description).
         """
         v_type = (vehicle_type or "").lower()
-        is_car_group = v_type in {"car", "truck", "bus"}
-        is_motor_group = v_type in {"motorcycle", "motorbike", "motor", "bike"}
+        is_car_group = v_type in {"car", "truck", "bus", "automobile"}
+        is_motor_group = v_type in {"motorcycle", "motorbike", "motor", "bike", "rider"}
 
         if not is_car_group and not is_motor_group:
             return False, "Bình thường"
@@ -117,15 +117,28 @@ class ViolationProcessor:
                 x_max = lane.get("x_max_pct", 100)
                 allowed = [str(a).lower() for a in lane.get("allowed", [])]
                 if x_min <= bc_x_pct <= x_max:
-                    if allowed and v_type not in allowed and not any(k in allowed for k in [v_type, "all"]):
-                        lane_name = lane.get("name", "Làn không được phép")
-                        return True, f"Đi vào {lane_name}"
+                    if allowed and "all" not in allowed:
+                        # Normalize vehicle group matching
+                        is_allowed = False
+                        for a in allowed:
+                            if a == v_type or a == "all":
+                                is_allowed = True
+                                break
+                            if is_car_group and a in {"car", "truck", "bus", "vehicle", "automobile"}:
+                                is_allowed = True
+                                break
+                            if is_motor_group and a in {"motorcycle", "motorbike", "motor", "bike", "rider"}:
+                                is_allowed = True
+                                break
+                        if not is_allowed:
+                            lane_name = lane.get("name", "Làn không được phép")
+                            return True, f"Đi vào {lane_name}"
             return False, "Đúng làn quy định"
 
         # Default standard lane rules: conservative checks to avoid false positives
-        if is_car_group and bc_x_pct > 94.0:
+        if is_car_group and bc_x_pct > 96.0:
             return True, "Ô tô đi vào lề đường bên phải"
-        if is_motor_group and bc_x_pct < 6.0:
+        if is_motor_group and bc_x_pct < 4.0:
             return True, "Xe máy đi vào giải phân cách bên trái"
 
         return False, "Đúng làn quy định"
@@ -288,7 +301,7 @@ class ViolationProcessor:
 
         crop = target_frame[vy1:vy2, vx1:vx2]
 
-        if crop.size == 0:
+        if crop.size == 0 or crop.shape[0] < 35 or crop.shape[1] < 35:
             return False, None
 
         try:
@@ -328,7 +341,8 @@ class ViolationProcessor:
                             if not best_helmet_sub_box:
                                 best_helmet_sub_box = sub_b
 
-            if max_no_helmet_conf >= 0.45 and max_no_helmet_conf > max_helmet_conf:
+            # Nâng ngưỡng khắt khe: conf không đội mũ >= 0.55 và vượt trội hơn conf đội mũ ít nhất 0.15
+            if max_no_helmet_conf >= 0.55 and max_no_helmet_conf > (max_helmet_conf + 0.15):
                 return True, best_helmet_sub_box
             elif max_helmet_conf > 0.35:
                 return False, best_helmet_sub_box
@@ -374,9 +388,9 @@ class ViolationProcessor:
                 m_g = cv2.inRange(hsv_bot, np.array([35, 60, 60]), np.array([95, 255, 255]))
                 green_ratio = np.sum(m_g > 0) / float(max(1, bot_crop.shape[0] * bot_crop.shape[1]))
 
-            if green_ratio > 0.02 or green_ratio > red_ratio:
+            if green_ratio > 0.03 or green_ratio >= red_ratio:
                 return "GREEN"
-            elif red_ratio > 0.08 and red_ratio > green_ratio:
+            elif red_ratio >= 0.12 and red_ratio > (1.5 * green_ratio):
                 return "RED"
 
         return "GREEN"
@@ -487,14 +501,7 @@ class ViolationProcessor:
                 ocr_plate, vehicle_snapshot_url, plate_snapshot_url = "", "", ""
 
                 if is_motor_vehicle or is_motorcycle:
-                    # 1. ALWAYS run License Plate Model + OCR for ALL vehicles!
-                    ocr_plate, vehicle_snapshot_url, plate_snapshot_url, plate_sub_bbox = await asyncio.to_thread(
-                        self._extract_plate_text, cap, file_path, bbox, t_sec
-                    )
-                    if plate_sub_bbox:
-                        metadata["plate_sub_box"] = plate_sub_bbox
-
-                    # 2. Check No-Helmet violation for motorcycles/riders
+                    # 1. Check No-Helmet violation for motorcycles/riders
                     is_no_helmet = False
                     helmet_sub_box = None
                     if is_motorcycle:
@@ -502,16 +509,16 @@ class ViolationProcessor:
                         if helmet_sub_box:
                             metadata["helmet_sub_box"] = helmet_sub_box
 
-                    # 3. Check Speeding violation (only if valid speed_kmh > speed_limit)
+                    # 2. Check Speeding violation (only if valid speed_kmh > speed_limit + 3.0 km/h)
                     speed_kmh = float(metadata.get("speed_kmh", 0.0) or 0.0)
-                    is_speeding = (is_motor_vehicle and speed_kmh > 0 and speed_kmh > speed_limit)
+                    is_speeding = (is_motor_vehicle and speed_kmh > 0 and speed_kmh > (speed_limit + 3.0))
 
-                    # 4. Check Wrong Lane violation
+                    # 3. Check Wrong Lane violation
                     is_wrong_lane, lane_desc = self._check_wrong_lane(class_name, bbox, 1280.0, 720.0, config_dict)
                     metadata["lane_info"] = {"description": lane_desc, "is_wrong_lane": is_wrong_lane}
 
                     # =========================================================================
-                    # QUY TRÌNH PHÁT HIỆN VI PHẠM VƯỢT ĐÈN ĐỎ 3D PHỐI CẢNH (ROAD 3D POLYGON)
+                    # QUY TRÌNH PHÁT HIỆN VI PHẠM VƯỢT ĐÈN ĐỎ
                     # =========================================================================
 
                     # BƯỚC 1: PHÁT HIỆN ĐÈN GIAO THÔNG (Traffic Light Detection)
@@ -533,33 +540,33 @@ class ViolationProcessor:
                     bc_x = (bbox.get("x1", 0) + bbox.get("x2", 0)) / 2.0
                     bc_y = float(bbox.get("y2", 0))
 
-                    # Kiểm tra phương tiện đã di chuyển vượt qua Vạch dừng đèn giao thông (stop_line_y = 345)
-                    is_crossing_stop_line = (bc_y <= stop_line_y and bc_y >= 120)
+                    # Phương tiện đã đi sâu qua Vạch dừng vào ngã tư trong lúc đèn Đỏ (stop_line_y = 345)
+                    is_crossing_stop_line = (bc_y <= (stop_line_y - 25) and bc_y >= 100)
 
-                    # BƯỚC 5: KIỂM TRA ĐIỀU KIỆN VI PHẠM ([TRẠNG THÁI ĐÈN: ĐỎ] AND [VỊ TRÍ: VƯỢT VẠCH DỪNG ĐÈN GIAO THÔNG])
+                    # BƯỚC 5: KIỂM TRA ĐIỀU KIỆN VI PHẠM ([ĐÈN: ĐỎ] AND [VỊ TRÍ: VƯỢT VẠCH DỪNG])
                     is_crossing_red_light = False
                     if is_motor_vehicle and has_traffic_light and is_red_signal and is_crossing_stop_line:
                         if track_id is not None:
                             track_zone_history[track_id].append((idx, t_sec, is_crossing_stop_line, is_red_signal))
                             recent_red_zone_frames = [s for s in track_zone_history[track_id] if s[2] and s[3]]
-                            if len(recent_red_zone_frames) >= 1:
+                            if len(recent_red_zone_frames) >= 2:
                                 is_crossing_red_light = True
                         else:
                             is_crossing_red_light = True
 
-                    # BƯỚC 6: BÁO CÁO VI PHẠM & LƯU BẰNG CHỨNG HÌNH ẢNH
+                    # BƯỚC 6: BÁO CÁO VI PHẠM (CHỈ THỰC HIỆN KHI THỰC SỰ VI PHẠM)
                     if is_no_helmet:
                         violation_type = "NO_HELMET"
                     elif is_speeding:
                         violation_type = "SPEEDING"
                     elif is_crossing_red_light:
                         violation_type = "RED_LIGHT"
-                        print(f"[BƯỚC 6: XÁC NHẬN VƯỢT ĐÈN ĐỎ 3D] Frame {idx:05d} | TrackID: {track_id} | Loại xe: {class_name} | Vị trí tâm đáy: ({bc_x:.1f},{bc_y:.1f}) | Trạng thái đèn: ĐỎ -> XÁC NHẬN VI PHẠM")
+                        print(f"[XÁC NHẬN VƯỢT ĐÈN ĐỎ] Frame {idx:05d} | TrackID: {track_id} | Xe: {class_name} | Tâm đáy: ({bc_x:.1f},{bc_y:.1f})")
                     elif is_wrong_lane:
                         violation_type = "WRONG_LANE"
-                        print(f"[XÁC NHẬN ĐI SAI LÀN ĐƯỜNG] Frame {idx:05d} | TrackID: {track_id} | Loại xe: {class_name} | Mo ta: {lane_desc}")
+                        print(f"[XÁC NHẬN ĐI SAI LÀN ĐƯỜNG] Frame {idx:05d} | TrackID: {track_id} | Xe: {class_name} | Mô tả: {lane_desc}")
 
-                    # Step 3: ONLY call License Plate Model + OCR if vehicle committed a genuine VIOLATION!
+                    # CHỈ GỌI ALPR (BẮT BIỂN SỐ & ĐỌC OCR) KHI PHƯƠNG TIỆN THỰC SỰ VI PHẠM!
                     if violation_type is not None:
                         ocr_plate, vehicle_snapshot_url, plate_snapshot_url, plate_sub_bbox = await asyncio.to_thread(
                             self._extract_plate_text, cap, file_path, bbox, t_sec
