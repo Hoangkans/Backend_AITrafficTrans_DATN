@@ -50,6 +50,21 @@ class OCRService:
             }
         )
 
+        # Regex trích xuất định dạng chuẩn biển số Việt Nam (VD: 59X1-123.45 hoặc 29A-123.45)
+        match = re.match(r"^(\d{2})([A-Z][A-Z0-9]?)(.+)$", raw)
+        if match:
+            prov = match.group(1)
+            series = match.group(2)
+            raw_digits = re.sub(r"[^0-9]", "", match.group(3).translate(digit_map))
+
+            if len(raw_digits) == 5:
+                return f"{prov}{series}-{raw_digits[:3]}.{raw_digits[3:]}"
+            elif len(raw_digits) == 4:
+                return f"{prov}{series}-{raw_digits}"
+            elif len(raw_digits) > 5:
+                digits_trimmed = raw_digits[:5]
+                return f"{prov}{series}-{digits_trimmed[:3]}.{digits_trimmed[3:]}"
+
         char1 = raw[0] if raw[0].isdigit() else "2"
         char2 = raw[1] if (len(raw) > 1 and raw[1].isdigit()) else "9"
         prefix_raw = char1 + char2
@@ -66,7 +81,7 @@ class OCRService:
         elif len(suffix) >= 2:
             return f"{prefix_raw}{series}-{suffix}"
         
-        return raw[:8]
+        return raw[:9]
 
     def extract_text(self, image: Any) -> str:
         if image is None:

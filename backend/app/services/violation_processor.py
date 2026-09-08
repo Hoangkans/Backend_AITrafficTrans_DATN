@@ -181,83 +181,76 @@ class ViolationProcessor:
         plate_text = ""
         plate_crop = None
         plate_sub_bbox = None
+        plate_url = ""
 
-        # Step 1: Run license_plate.pt model with conf=0.05 on vehicle crop
+        # BƯỚC 1: CAMERA / MÔ HÌNH BẮT ĐƯỢC HÌNH ẢNH BIỂN SỐ XE TRƯỚC (Detection Phase)
+        # Sử dụng mô hình License_Plate.pt để tìm chính xác khung hình ảnh vùng biển số xe
+        detected_plate = False
         if self.yolo.license_plate_model:
             try:
-                plate_results = self.yolo.license_plate_model(vehicle_crop, conf=0.05)
+                plate_results = self.yolo.license_plate_model(vehicle_crop, conf=0.10)
+                best_conf = 0.0
+                best_p_crop = None
+                best_sub_bbox = None
+
                 for pr in plate_results:
                     for pbox in pr.boxes:
+                        conf = float(pbox.conf[0])
                         px1, py1, px2, py2 = map(int, pbox.xyxy[0].tolist())
+                        vw = max(1, vehicle_crop.shape[1])
+                        vh = max(1, vehicle_crop.shape[0])
+
+                        # Thêm lề (padding) 4px xung quanh vùng ảnh biển số đã bắt được
                         pad = 4
                         raw_p_crop = vehicle_crop[
-                            max(0, py1 - pad):min(vehicle_crop.shape[0], py2 + pad),
-                            max(0, px1 - pad):min(vehicle_crop.shape[1], px2 + pad)
+                            max(0, py1 - pad):min(vh, py2 + pad),
+                            max(0, px1 - pad):min(vw, px2 + pad)
                         ]
-                        if raw_p_crop.size > 0:
-                            plate_crop = raw_p_crop
-                            vw = max(1, vehicle_crop.shape[1])
-                            vh = max(1, vehicle_crop.shape[0])
-                            plate_sub_bbox = {
+
+                        if raw_p_crop.size > 0 and conf > best_conf:
+                            best_conf = conf
+                            best_p_crop = raw_p_crop
+                            best_sub_bbox = {
                                 "x_pct": round((px1 / vw) * 100, 1),
                                 "y_pct": round((py1 / vh) * 100, 1),
                                 "w_pct": round(((px2 - px1) / vw) * 100, 1),
                                 "h_pct": round(((py2 - py1) / vh) * 100, 1),
+                                "conf": round(conf, 2),
                             }
-                            enhanced_p = self._enhance_crop_for_ocr(raw_p_crop)
-                            txt = self.ocr.extract_text(enhanced_p)
-                            norm = self.ocr.normalize_plate_text(txt)
-                            if norm:
-                                plate_text = norm
-                                break
-                    if plate_text:
-                        break
+
+                # BƯỚC 2: SAU KHI ĐÃ BẮT ĐƯỢC HÌNH ẢNH BIỂN SỐ -> MỚI TIẾN HÀNH XÁC ĐỊNH & ĐỌC OCR (Identification Phase)
+                if best_p_crop is not None and best_p_crop.size > 0:
+                    detected_plate = True
+                    plate_crop = best_p_crop
+                    plate_sub_bbox = best_sub_bbox
+
+                    # Lưu ảnh snapshot vùng biển số đã bắt được để làm bằng chứng
+                    try:
+                        plate_filename = f"plate_{uuid.uuid4().hex[:8]}.jpg"
+                        plate_path = os.path.join(os.path.dirname(file_path), plate_filename)
+                        cv2.imwrite(plate_path, plate_crop)
+                        plate_url = f"/evidence/{plate_filename}"
+                    except Exception as save_err:
+                        print(f"[!] Lỗi lưu ảnh chụp vùng biển số: {save_err}")
+
+                    # Tiến hành tiền xử lý làm rõ ảnh & đọc chữ/số trên vùng ảnh biển số vừa bắt
+                    enhanced_p = self._enhance_crop_for_ocr(plate_crop)
+                    raw_txt = self.ocr.extract_text(enhanced_p)
+                    norm_txt = self.ocr.normalize_plate_text(raw_txt)
+
+                    if norm_txt:
+                        plate_text = norm_txt
+                    elif raw_txt and len(raw_txt.strip()) >= 3:
+                        # Nếu đọc ra chuỗi nhưng chưa khớp regex chuẩn 100%, vẫn giữ chuỗi thô đã đọc
+                        plate_text = raw_txt.strip().upper()
+
             except Exception as e:
-                print(f"[!] License plate model crop extraction error: {e}")
+                print(f"[!] Lỗi phát hiện/xác định biển số xe: {e}")
 
-        # Step 2: Fallback OCR on bottom portion of vehicle crop if license_plate.pt did not yield text
-        if not plate_text:
-            try:
-                h_c = vehicle_crop.shape[0]
-                lower_crop = vehicle_crop[int(h_c * 0.35):, :]
-                if lower_crop.size > 0:
-                    enhanced_lower = self._enhance_crop_for_ocr(lower_crop)
-                    txt = self.ocr.extract_text(enhanced_lower)
-                    norm = self.ocr.normalize_plate_text(txt)
-                    if norm:
-                        plate_text = norm
-                        plate_crop = lower_crop
-                        plate_sub_bbox = {"x_pct": 20.0, "y_pct": 65.0, "w_pct": 60.0, "h_pct": 25.0}
-            except Exception as exc:
-                pass
-
-        # Step 3: Direct OCR fallback on full vehicle crop if license plate crop not detected
-        if not plate_text and vehicle_crop is not None and vehicle_crop.size > 0:
-            try:
-                enhanced_veh = self._enhance_crop_for_ocr(vehicle_crop)
-                txt = self.ocr.extract_text(enhanced_veh)
-                norm = self.ocr.normalize_plate_text(txt)
-                if norm:
-                    plate_text = norm
-                    if not plate_crop or plate_crop.size == 0:
-                        plate_crop = vehicle_crop
-                        plate_sub_bbox = {"x_pct": 15.0, "y_pct": 60.0, "w_pct": 70.0, "h_pct": 30.0}
-            except Exception as exc:
-                pass
-
-        # Return empty string if no valid license plate detected by model or OCR
-        if not plate_text:
+        # NẾU CAMERA KHÔNG BẮT ĐƯỢC HÌNH ẢNH BIỂN SỐ:
+        # Trả về rỗng, KHÔNG thực hiện OCR mù ngẫu nhiên trên thân xe để tránh nhận diện sai
+        if not detected_plate:
             return "", vehicle_snapshot_url, "", None
-
-        plate_url = ""
-        if plate_crop is not None and plate_crop.size > 0:
-            try:
-                plate_filename = f"plate_{uuid.uuid4().hex[:8]}.jpg"
-                plate_path = os.path.join(os.path.dirname(file_path), plate_filename)
-                cv2.imwrite(plate_path, plate_crop)
-                plate_url = f"/evidence/{plate_filename}"
-            except Exception as save_err:
-                print(f"[!] Failed to save plate crop image: {save_err}")
 
         return plate_text, vehicle_snapshot_url, plate_url, plate_sub_bbox
 
